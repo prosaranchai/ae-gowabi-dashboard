@@ -687,25 +687,85 @@ with tab_ov:
     if is_rr:
         st.info(f"📅 ข้อมูล {stats['days']}/{stats['days_in_month']} วัน ({stats['coverage_pct']}%) — Run Rate GMV = ฿{stats['gmv_run_rate']/1e6:.1f}M")
 
-    # AM scorecard
-    st.markdown('<div class="section-title">AM Scorecard</div>', unsafe_allow_html=True)
+    # AM scorecard — per-person filter
     am_full = pd.DataFrame(mdata["am"])
-    am_cols = st.columns(min(len(am_full),6))
-    for col,(_, r) in zip(am_cols, am_full.sort_values("avg_health").iterrows()):
-        col.markdown(f"""<div style="background:#f8f7f4;border-radius:10px;padding:.75rem 1rem;border:0.5px solid rgba(0,0,0,0.07)">
-          <div style="font-size:12px;font-weight:500">{r['kam']}</div>
-          <div style="font-size:19px;font-weight:500;color:{sc(r['avg_health'])}">{r['avg_health']:.1f}</div>
-          <div style="font-size:10px;color:#999">{int(r['shops'])} shops · {fmt_gmv(r['gmv'])}</div>
-          <div style="font-size:10px;margin-top:3px"><span style="color:#E24B4A">● {int(r['critical_shops'])}</span> <span style="color:#EF9F27">● {int(r['warning_shops'])}</span></div>
+    shops_full = pd.DataFrame(mdata["shops"])
+
+    st.markdown('<div class="section-title">AM Scorecard — คลิกเพื่อดูรายคน</div>', unsafe_allow_html=True)
+    ov_am_sel = st.session_state.get("ov_am_sel", "all")
+
+    # AM selector pills
+    pill_cols = st.columns(min(len(am_full)+1, 7))
+    if pill_cols[0].button("ทั้งหมด", key="ov_all",
+                           type="primary" if ov_am_sel=="all" else "secondary",
+                           use_container_width=True):
+        st.session_state["ov_am_sel"] = "all"; st.rerun()
+    for i, (_, r) in enumerate(am_full.sort_values("avg_health").iterrows()):
+        if i+1 < len(pill_cols):
+            if pill_cols[i+1].button(r["kam"], key=f"ov_{r['kam']}",
+                                     type="primary" if ov_am_sel==r["kam"] else "secondary",
+                                     use_container_width=True):
+                st.session_state["ov_am_sel"] = r["kam"]; st.rerun()
+
+    # Filter data by selected AM
+    am_src_ov = am_full if ov_am_sel=="all" else am_full[am_full["kam"]==ov_am_sel]
+    shops_src  = shops_full if ov_am_sel=="all" else shops_full[shops_full["kam"]==ov_am_sel]
+
+    # ── AM Scorecard cards with 6 metrics ──────────────────────────────────
+    for _, r in am_src_ov.sort_values("avg_health").iterrows():
+        am_shops = shops_src[shops_src["kam"]==r["kam"]] if ov_am_sel=="all" else shops_src
+        total_orders = am_shops["total_orders"].sum() if "total_orders" in am_shops.columns else 0
+        basket_size  = r["gmv"] / total_orders if total_orders > 0 else 0
+        avg_view     = am_shops["avg_view"].mean() if "avg_view" in am_shops.columns else 0
+        avg_cr       = am_shops["avg_cr"].mean()   if "avg_cr"   in am_shops.columns else 0
+        new_cust     = am_shops["new_customers"].sum() if "new_customers" in am_shops.columns else 0
+
+        health_color = sc(r["avg_health"])
+        st.markdown(f"""
+        <div style="background:#fff;border:1px solid #e8e5e0;border-radius:12px;padding:12px 16px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+            <div style="font-size:14px;font-weight:600;min-width:80px">{r['kam']}</div>
+            <div style="font-size:22px;font-weight:600;color:{health_color}">{r['avg_health']:.1f}</div>
+            <div style="font-size:11px;color:#aaa">{int(r['shops'])} shops</div>
+            <div style="margin-left:auto;font-size:11px">
+              <span style="color:#E24B4A">● {int(r['critical_shops'])} critical</span>&nbsp;&nbsp;
+              <span style="color:#EF9F27">● {int(r['warning_shops'])} warning</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
+            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">GMV</div>
+              <div style="font-size:14px;font-weight:600">{fmt_gmv(r['gmv'])}</div>
+            </div>
+            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Orders</div>
+              <div style="font-size:14px;font-weight:600">{int(total_orders):,}</div>
+            </div>
+            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Basket Size</div>
+              <div style="font-size:14px;font-weight:600">฿{basket_size:,.0f}</div>
+            </div>
+            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">New User</div>
+              <div style="font-size:14px;font-weight:600">{int(new_cust):,}</div>
+            </div>
+            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Shop View</div>
+              <div style="font-size:14px;font-weight:600">{avg_view:,.0f}</div>
+            </div>
+            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">CVR</div>
+              <div style="font-size:14px;font-weight:600;color:{sc(r['avg_cvr'])}">{avg_cr:.2f}%</div>
+            </div>
+          </div>
         </div>""", unsafe_allow_html=True)
 
     # Pillar scores
     st.markdown('<div class="section-title">5 Pillar Scores</div>', unsafe_allow_html=True)
     pcols = st.columns(5)
-    am_src = am_full if sel_am=="ทั้งหมด" else am_full[am_full["kam"]==sel_am]
     pillar_am_keys = ["avg_sku","avg_price","avg_op","avg_view","avg_cvr"]
     for col,(pname,pk) in zip(pcols, zip(PILLAR_NAMES, pillar_am_keys)):
-        avg   = am_src[pk].mean() if len(am_src) else 0
+        avg   = am_src_ov[pk].mean() if len(am_src_ov) else 0
         label = "ต้องแก้" if avg<40 else "ปรับปรุง" if avg<60 else "ดี"
         bg,tc = ("#FCEBEB","#A32D2D") if avg<40 else ("#FAEEDA","#854F0B") if avg<60 else ("#EAF3DE","#3B6D11")
         col.markdown(f"""<div style="background:#f8f7f4;border-radius:10px;padding:.75rem 1rem;border:0.5px solid rgba(0,0,0,0.07)">
@@ -723,72 +783,119 @@ with tab_gmv:
     if not trend:
         st.info("Upload ข้อมูลหลายเดือนเพื่อดู trend")
     else:
-        trend_kam = pd.DataFrame(trend.get("kam",[]))
-        trend_shop= pd.DataFrame(trend.get("shops",[]))
-        trend_svc = pd.DataFrame(trend.get("services",[]))
+        trend_kam  = pd.DataFrame(trend.get("kam",[]))
+        trend_shop = pd.DataFrame(trend.get("shops",[]))
+        trend_svc  = pd.DataFrame(trend.get("services",[]))
+
+        # ── Filters ────────────────────────────────────────────────────────
+        gf1, gf2 = st.columns([1,2])
+        with gf1:
+            gmv_am_filt = st.selectbox("Filter by KAM", ["ทั้งหมด"]+sorted(REAL_AMS), key="gmv_am")
+        with gf2:
+            # Shop search filter
+            all_shop_names = sorted(trend_shop["organization_name"].unique()) if len(trend_shop) else []
+            gmv_shop_filt  = st.multiselect("Filter by Shop (เว้นว่าง = ทั้งหมด)",
+                                             all_shop_names, default=[], key="gmv_shop",
+                                             placeholder="เลือกร้านที่ต้องการ…")
 
         # Build monthly summary across all months
-        all_months = sorted(idx_now.keys())
-        all_labels = [idx_now[m]["label"] for m in all_months]
-        all_gmv    = [idx_now[m]["stats"]["gmv"] for m in all_months]
-        all_rr_gmv = [idx_now[m]["stats"]["gmv_run_rate"] for m in all_months]
-        all_complete= [idx_now[m]["stats"].get("is_complete",True) for m in all_months]
-
-        # Show run rate for incomplete months
-        gmv_display = [rr if not ok else ac for ac,rr,ok in zip(all_gmv,all_rr_gmv,all_complete)]
+        all_months  = sorted(idx_now.keys())
+        all_labels  = [idx_now[m]["label"] for m in all_months]
+        all_gmv     = [idx_now[m]["stats"]["gmv"] for m in all_months]
+        all_rr_gmv  = [idx_now[m]["stats"]["gmv_run_rate"] for m in all_months]
 
         col1,col2 = st.columns(2)
         with col1:
-            st.markdown('<div class="section-title">GMV รายเดือน (฿M) — * = Run Rate</div>', unsafe_allow_html=True)
-            chart_data = pd.DataFrame({"month":all_labels,"GMV":[v/1e6 for v in all_gmv],"Run Rate":[v/1e6 for v in all_rr_gmv]})
-            st.bar_chart(chart_data.set_index("month")["GMV"], use_container_width=True, height=180)
-
+            st.markdown('<div class="section-title">GMV รายเดือน (฿M)</div>', unsafe_allow_html=True)
+            st.bar_chart(pd.DataFrame({"GMV":[v/1e6 for v in all_gmv]}, index=all_labels),
+                         use_container_width=True, height=180)
         with col2:
             st.markdown('<div class="section-title">MoM Table</div>', unsafe_allow_html=True)
             mom_rows = []
-            for i, (m, label) in enumerate(zip(all_months, all_labels)):
-                info  = idx_now[m]["stats"]
-                gmv   = info["gmv"]
-                rr    = info["gmv_run_rate"]
-                prev  = idx_now[all_months[i-1]]["stats"]["gmv"] if i>0 else None
-                mom   = f"{(gmv-prev)/prev*100:+.1f}%" if prev else "–"
-                rr_str= f"฿{rr/1e6:.1f}M" if not info.get("is_complete") else ""
-                mom_rows.append({"Month":label,"GMV":fmt_gmv(gmv),"Run Rate":rr_str,"MoM":mom})
+            for i,(m,label) in enumerate(zip(all_months, all_labels)):
+                info = idx_now[m]["stats"]
+                gmv  = info["gmv"]; rr = info["gmv_run_rate"]
+                prev = idx_now[all_months[i-1]]["stats"]["gmv"] if i>0 else None
+                mom  = f"{(gmv-prev)/prev*100:+.1f}%" if prev else "–"
+                mom_rows.append({"Month":label,"GMV":fmt_gmv(gmv),
+                                 "Run Rate":f"฿{rr/1e6:.1f}M" if not info.get("is_complete") else "–","MoM":mom})
             st.dataframe(pd.DataFrame(mom_rows), hide_index=True, use_container_width=True)
 
+        # GMV by AM trend (filtered)
         st.markdown('<div class="section-title">GMV by AM รายเดือน (฿M)</div>', unsafe_allow_html=True)
         if len(trend_kam):
-            am_filt = sel_am if sel_am != "ทั้งหมด" else None
             km = trend_kam.copy()
-            if am_filt: km = km[km["kam"]==am_filt]
+            if gmv_am_filt != "ทั้งหมด": km = km[km["kam"]==gmv_am_filt]
             km_pivot = km.pivot(index="month", columns="kam", values="gmv").fillna(0) / 1e6
             st.line_chart(km_pivot, use_container_width=True, height=200)
 
         col3,col4 = st.columns(2)
         with col3:
-            st.markdown('<div class="section-title">Top 20 Shops — GMV by Month (฿K)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">All Shops — GMV by Month (฿K)</div>', unsafe_allow_html=True)
             if len(trend_shop):
                 ts = trend_shop.copy()
-                if sel_am != "ทั้งหมด": ts = ts[ts["kam"]==sel_am]
-                top_shops = ts.groupby("organization_name")["gmv"].sum().nlargest(20).index
-                ts = ts[ts["organization_name"].isin(top_shops)]
-                tp = ts.pivot(index="month", columns="organization_name", values="gmv").fillna(0) / 1e3
-                st.dataframe(tp.round(0), use_container_width=True, height=300)
+                if gmv_am_filt != "ทั้งหมด": ts = ts[ts["kam"]==gmv_am_filt]
+                if gmv_shop_filt: ts = ts[ts["organization_name"].isin(gmv_shop_filt)]
+                top20 = ts.groupby("organization_name")["gmv"].sum().sort_values(ascending=False).index
+                ts = ts[ts["organization_name"].isin(top20)]
+                # Swap axes: rows=shops, columns=months (฿K)
+                tp = ts.pivot(index="organization_name", columns="month", values="gmv").fillna(0) / 1e3
+                # Add total column
+                tp["Total"] = tp.sum(axis=1)
+                tp = tp.sort_values("Total", ascending=False).drop(columns="Total")
+                # Rename month columns to labels
+                tp.columns = [idx_now.get(c,{}).get("label",c) if c in idx_now else c for c in tp.columns]
+                tp.index.name = "Shop"
+                st.dataframe(tp.round(0), use_container_width=True, height=320)
 
         with col4:
             st.markdown('<div class="section-title">Top 20 Services — GMV Total (฿K)</div>', unsafe_allow_html=True)
             if len(trend_svc):
-                sv = trend_svc.groupby("service_name")["gmv"].sum().nlargest(20).reset_index()
+                sv = trend_svc.copy()
+                sv["gmv"] = pd.to_numeric(sv["gmv"], errors="coerce").fillna(0)
+                sv = sv.groupby("service_name")["gmv"].sum().nlargest(20).reset_index()
                 sv["gmv"] = (sv["gmv"]/1e3).round(0)
                 sv.columns = ["Service","GMV (฿K)"]
-                st.dataframe(sv, hide_index=True, use_container_width=True, height=300)
+                st.dataframe(sv, hide_index=True, use_container_width=True, height=320)
 
 
 # ══ TAB 2: Category ════════════════════════════════════════════════════════════
 with tab_cat:
-    st.markdown('<div class="section-title">Category Overview — ' + sel_info["label"] + '</div>', unsafe_allow_html=True)
+    # ── Filters ────────────────────────────────────────────────────────────
+    cf1, cf2 = st.columns(2)
+    with cf1:
+        cat_am_filt = st.selectbox("Filter by KAM", ["ทั้งหมด"]+sorted(REAL_AMS), key="cat_am")
+    with cf2:
+        # Month filter from available periods
+        all_months_cat = sorted(idx_now.keys())
+        month_opts_cat = ["ทุกเดือน"] + [idx_now[m]["label"] for m in all_months_cat]
+        cat_month_filt = st.selectbox("Filter by Month", month_opts_cat, key="cat_month",
+                                      index=len(month_opts_cat)-1)  # default = latest
 
-    cat_full = pd.DataFrame(mdata["category"])
+    # Resolve selected month key
+    sel_month_cat = None
+    if cat_month_filt != "ทุกเดือน":
+        for mk in all_months_cat:
+            if idx_now[mk]["label"] == cat_month_filt:
+                sel_month_cat = mk; break
+
+    # Load category data for selected month
+    if sel_month_cat:
+        mdata_cat  = load_month_data(sel_month_cat) or mdata
+    else:
+        mdata_cat  = mdata
+
+    cat_full = pd.DataFrame(mdata_cat["category"])
+
+    # Apply KAM filter on shops to get category breakdown by AM
+    if cat_am_filt != "ทั้งหมด" and sel_month_cat:
+        shops_for_cat = pd.DataFrame(mdata_cat.get("shops",[]))
+        if len(shops_for_cat):
+            am_shop_ids = set(shops_for_cat[shops_for_cat["kam"]==cat_am_filt]["shop_id_str"].astype(str))
+            # Note: category breakdown from mdata is not per-AM — show a note
+            st.info(f"หมายเหตุ: Category data แสดง {cat_month_filt} ทั้งหมด · KAM filter มีผลกับ Store Health เท่านั้น")
+
+    st.markdown(f'<div class="section-title">Category Overview — {cat_month_filt}</div>', unsafe_allow_html=True)
     if len(cat_full):
         cat_full["new_pct"] = (cat_full["new_customers"]/cat_full["unique_customers"].replace(0,np.nan)*100).round(1).fillna(0)
         cat_full = cat_full.sort_values("gmv", ascending=False)
@@ -802,19 +909,39 @@ with tab_cat:
         )
 
     if trend.get("category"):
-        trend_cat = pd.DataFrame(trend["category"])
+        trend_cat   = pd.DataFrame(trend["category"])
         trend_cat_f = trend_cat.copy()
-        # GMV trend
+
+        # Apply month filter to trend
+        if cat_month_filt != "ทุกเดือน" and sel_month_cat:
+            trend_cat_f = trend_cat_f[trend_cat_f["month"]==sel_month_cat]
+
         st.markdown('<div class="section-title">GMV by Category รายเดือน (฿M)</div>', unsafe_allow_html=True)
-        top_cats = trend_cat_f.groupby("category")["gmv"].sum().nlargest(8).index
-        ct = trend_cat_f[trend_cat_f["category"].isin(top_cats)]
+        tc_all = trend_cat.copy()  # always show full trend for chart
+        top_cats = tc_all.groupby("category")["gmv"].sum().nlargest(8).index
+        ct = tc_all[tc_all["category"].isin(top_cats)]
         ct_pivot = ct.pivot(index="month", columns="category", values="gmv").fillna(0) / 1e6
+        # Rename month index to labels
+        ct_pivot.index = [idx_now.get(m,{}).get("label",m) for m in ct_pivot.index]
         st.line_chart(ct_pivot, use_container_width=True, height=220)
 
         st.markdown('<div class="section-title">New User % by Category รายเดือน</div>', unsafe_allow_html=True)
-        trend_cat_f["new_pct"] = (trend_cat_f["new"]/trend_cat_f["customers"].replace(0,np.nan)*100).round(1).fillna(0)
-        np_pivot = trend_cat_f[trend_cat_f["category"].isin(top_cats)].pivot(index="month", columns="category", values="new_pct").fillna(0)
+        trend_cat["new_pct"] = (trend_cat["new"]/trend_cat["customers"].replace(0,np.nan)*100).round(1).fillna(0)
+        np_data = trend_cat[trend_cat["category"].isin(top_cats)]
+        np_pivot = np_data.pivot(index="month", columns="category", values="new_pct").fillna(0)
+        np_pivot.index = [idx_now.get(m,{}).get("label",m) for m in np_pivot.index]
         st.line_chart(np_pivot, use_container_width=True, height=180)
+
+        # Category detail table per month
+        st.markdown('<div class="section-title">Category Detail by Month</div>', unsafe_allow_html=True)
+        cat_detail = trend_cat.copy()
+        cat_detail["gmv"] = pd.to_numeric(cat_detail["gmv"], errors="coerce").fillna(0)
+        cat_detail["month_label"] = cat_detail["month"].map(lambda m: idx_now.get(m,{}).get("label",m))
+        cat_pivot = cat_detail.pivot_table(index="category", columns="month_label",
+                                           values="gmv", aggfunc="sum").fillna(0) / 1e3
+        cat_pivot["Total"] = cat_pivot.sum(axis=1)
+        cat_pivot = cat_pivot.sort_values("Total", ascending=False)
+        st.dataframe(cat_pivot.round(0), use_container_width=True, height=280)
 
 
 # ══ TAB 3: New User ════════════════════════════════════════════════════════════
@@ -889,22 +1016,80 @@ with tab_action:
     action_shops = action_shops[action_shops["priority"].isin(["critical","warning"])]
     action_shops = action_shops[action_shops["alert_count"]>0].sort_values("health_score")
 
-    st.markdown(f'<div class="section-title">Action List — {len(action_shops)} ร้านที่ต้องดูแล</div>', unsafe_allow_html=True)
-    st.caption("เรียงตาม health score ต่ำสุดก่อน — แต่ละร้านมี action ที่ควรทำ")
+    # ── Filters row ──────────────────────────────────────────────────────────
+    f_col1, f_col2, f_col3 = st.columns([3, 2, 2])
 
-    # AM quick filter
-    ams_with_issues = sorted(action_shops["kam"].unique())
-    am_filter_cols = st.columns(len(ams_with_issues)+1)
-    cur_filter = st.session_state.get("action_am_filter","all")
-    if am_filter_cols[0].button("ทั้งหมด", type="primary" if cur_filter=="all" else "secondary"):
-        st.session_state["action_am_filter"] = "all"; st.rerun()
-    for i, am_name in enumerate(ams_with_issues):
-        n = (action_shops["kam"]==am_name).sum()
-        if am_filter_cols[i+1].button(f"{am_name} ({n})", type="primary" if cur_filter==am_name else "secondary"):
-            st.session_state["action_am_filter"] = am_name; st.rerun()
+    with f_col1:
+        st.markdown('<div class="section-title" style="margin-bottom:4px">Filter by AM</div>', unsafe_allow_html=True)
+        ams_with_issues = sorted(action_shops["kam"].unique())
+        cur_filter = st.session_state.get("action_am_filter","all")
+        am_btns = st.columns(min(len(ams_with_issues)+1, 6))
+        if am_btns[0].button("ทั้งหมด", key="af_all",
+                             type="primary" if cur_filter=="all" else "secondary",
+                             use_container_width=True):
+            st.session_state["action_am_filter"] = "all"; st.rerun()
+        for i, am_name in enumerate(ams_with_issues[:5]):
+            n = (action_shops["kam"]==am_name).sum()
+            if am_btns[i+1].button(f"{am_name}\n({n})", key=f"af_{am_name}",
+                                   type="primary" if cur_filter==am_name else "secondary",
+                                   use_container_width=True):
+                st.session_state["action_am_filter"] = am_name; st.rerun()
+        if len(ams_with_issues) > 5:
+            extra = st.selectbox("AM อื่นๆ", ["–"]+ams_with_issues[5:], key="af_extra", label_visibility="collapsed")
+            if extra != "–":
+                st.session_state["action_am_filter"] = extra; st.rerun()
 
+    with f_col2:
+        st.markdown('<div class="section-title" style="margin-bottom:4px">Filter by GMV</div>', unsafe_allow_html=True)
+        max_gmv = int(action_shops["gmv"].max()) if len(action_shops) else 1000000
+        gmv_range = st.select_slider(
+            "GMV range",
+            options=["ทั้งหมด", "< ฿10K", "฿10K–50K", "฿50K–200K", "฿200K–1M", "> ฿1M"],
+            value="ทั้งหมด",
+            key="gmv_range_filter",
+            label_visibility="collapsed"
+        )
+
+    with f_col3:
+        st.markdown('<div class="section-title" style="margin-bottom:4px">Sort by</div>', unsafe_allow_html=True)
+        sort_by = st.selectbox(
+            "Sort",
+            ["Health score (ต่ำสุดก่อน)", "GMV (สูงสุดก่อน)", "GMV (ต่ำสุดก่อน)", "Alert count (มากสุดก่อน)"],
+            key="action_sort",
+            label_visibility="collapsed"
+        )
+
+    # Apply AM filter
     if cur_filter != "all":
         action_shops = action_shops[action_shops["kam"]==cur_filter]
+
+    # Apply GMV filter
+    gmv_map = {
+        "< ฿10K":      (0,       10_000),
+        "฿10K–50K":   (10_000,  50_000),
+        "฿50K–200K":  (50_000,  200_000),
+        "฿200K–1M":   (200_000, 1_000_000),
+        "> ฿1M":       (1_000_000, 999_999_999),
+    }
+    if gmv_range != "ทั้งหมด" and gmv_range in gmv_map:
+        lo, hi = gmv_map[gmv_range]
+        action_shops = action_shops[(action_shops["gmv"] >= lo) & (action_shops["gmv"] < hi)]
+
+    # Apply sort
+    sort_map = {
+        "Health score (ต่ำสุดก่อน)": ("health_score", True),
+        "GMV (สูงสุดก่อน)":           ("gmv", False),
+        "GMV (ต่ำสุดก่อน)":           ("gmv", True),
+        "Alert count (มากสุดก่อน)":   ("alert_count", False),
+    }
+    sc_col, sc_asc = sort_map.get(sort_by, ("health_score", True))
+    action_shops = action_shops.sort_values(sc_col, ascending=sc_asc)
+
+    st.markdown(f'<div class="section-title">Action List — {len(action_shops)} ร้านที่ต้องดูแล</div>', unsafe_allow_html=True)
+    if gmv_range != "ทั้งหมด":
+        st.caption(f"กรอง: GMV {gmv_range} · เรียงตาม {sort_by}")
+    else:
+        st.caption(f"เรียงตาม {sort_by}")
 
     for _, row in action_shops.head(80).iterrows():
         acts = []
