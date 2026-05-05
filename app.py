@@ -349,7 +349,7 @@ def cprio(v):
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
-is_admin = st.query_params.get("admin","") == "1"
+is_admin = True  # Admin panel always visible — protected by password
 idx      = load_index_cached()
 
 with st.sidebar:
@@ -358,11 +358,10 @@ with st.sidebar:
     st.markdown("---")
 
     # ── Admin panel ──────────────────────────────────────────────────────
-    if is_admin:
-        st.markdown("#### 🔐 Admin")
-        pw = st.text_input("Password", type="password")
+    st.markdown("#### 🔐 Upload Data")
+    pw = st.text_input("Password", type="password", placeholder="ใส่ password เพื่อ upload")
 
-        if pw == st.secrets.get("ADMIN_PASSWORD","gowabi2024"):
+    if pw == st.secrets.get("ADMIN_PASSWORD","gowabi2024"):
             st.success("✓ Authenticated")
 
             with st.expander("📤 Upload Raw Data", expanded=True):
@@ -479,9 +478,9 @@ with st.sidebar:
                     st.markdown("---")
                     st.caption("Supabase free tier: 500MB — เก็บได้นานหลายปี")
 
-        elif pw:
-            st.error("Password ไม่ถูกต้อง")
-        st.markdown("---")
+    elif pw:
+        st.error("Password ไม่ถูกต้อง")
+    st.markdown("---")
 
     # ── Filters ──────────────────────────────────────────────────────────
     idx_now = load_index_cached()
@@ -513,18 +512,105 @@ with st.sidebar:
         sel_prio   = st.multiselect("Priority", ["critical","warning","healthy"], default=["critical","warning"])
         sel_search = st.text_input("ค้นหาร้าน", placeholder="ชื่อร้าน…")
         st.markdown("---")
-        st.caption(f"Not admin? เพิ่ม `?admin=1` ใน URL" if not is_admin else "")
+        pass  # admin always shown
 
 
 # ─── No data ──────────────────────────────────────────────────────────────────
 idx_now = load_index_cached()
 if not idx_now:
-    st.markdown("""
-    <div style="text-align:center;padding:4rem 0">
-      <div style="font-size:48px">💆</div>
-      <h2 style="font-weight:500;margin:.75rem 0 .4rem">Gowabi AM Dashboard</h2>
-      <p style="color:#888">Admin กรุณา upload ข้อมูลผ่าน <code>?admin=1</code></p>
-    </div>""", unsafe_allow_html=True)
+    if True:
+        # Always show upload panel — protected by password
+        st.markdown("## 💆 Gowabi AM Dashboard")
+        st.info("ยังไม่มีข้อมูล — upload ไฟล์แรกได้เลยครับ")
+        st.markdown("---")
+
+        col_main, col_side = st.columns([2, 1])
+        with col_main:
+            st.markdown("### 📤 Upload Raw Data")
+
+            # Check password
+            pw_main = st.text_input("Admin Password", type="password", key="pw_main")
+            if pw_main and pw_main != st.secrets.get("ADMIN_PASSWORD", "gowabi2024"):
+                st.error("Password ไม่ถูกต้อง")
+                st.stop()
+            elif pw_main:
+                st.success("✓ Authenticated")
+
+                tx_file_main = st.file_uploader("ไฟล์ที่ 1 — Transaction (csv/xlsx) ✱",
+                                                type=["csv","xlsx"], key="tx_main")
+                view_file_main = st.file_uploader("ไฟล์ที่ 2 — View/CR (csv) — ไม่บังคับ",
+                                                   type=["csv"], key="view_main")
+
+                upload_mode_main = st.radio(
+                    "โหมด Upload",
+                    ["🔄 Overwrite — แทนที่ข้อมูลเดือนที่มีอยู่",
+                     "➕ Append — เพิ่มเฉพาะเดือนใหม่"],
+                    key="mode_main"
+                )
+                is_overwrite_main = upload_mode_main.startswith("🔄")
+
+                if tx_file_main:
+                    # Preview months
+                    try:
+                        tmp = pd.read_csv(io.BytesIO(tx_file_main.read()),
+                                          usecols=["service_created_at","kam"],
+                                          low_memory=False)
+                        tx_file_main.seek(0)
+                        tmp["ts"] = pd.to_datetime(tmp["service_created_at"], errors="coerce")
+                        tmp = tmp[tmp["kam"].isin(REAL_AMS)]
+                        found_m = sorted(tmp["ts"].dt.to_period("M").dropna().unique())
+                        st.info(f"พบข้อมูล **{len(found_m)} เดือน**: " +
+                                ", ".join([MONTH_LABELS[p.month-1]+f" {p.year}" for p in found_m]))
+                    except Exception:
+                        pass
+
+                    if st.button("🚀 Process & Upload", type="primary", use_container_width=True,
+                                 key="btn_main"):
+                        with st.spinner("Processing… อาจใช้เวลา 1–3 นาที"):
+                            tx_file_main.seek(0)
+                            result = process_raw(
+                                tx_file_main.read(),
+                                view_file_main.read() if view_file_main else None
+                            )
+                        idx_fresh = load_index()
+                        saved = []
+                        for mkey, mdata_item in result["months"].items():
+                            if not is_overwrite_main and mkey in idx_fresh:
+                                continue
+                            save_month(mkey, mdata_item)
+                            idx_fresh[mkey] = {
+                                "label":       mdata_item["stats"]["label"],
+                                "upload_time": result["upload_time"],
+                                "stats":       mdata_item["stats"],
+                            }
+                            saved.append(mkey)
+                        if result.get("trend"):
+                            save_trend(result["trend"])
+                        save_index(idx_fresh)
+                        load_index_cached.clear()
+                        load_month_data.clear()
+                        load_trend_data.clear()
+                        if saved:
+                            mlabels = [MONTH_LABELS[int(m.split('-')[1])-1]+' '+m.split('-')[0]
+                                       for m in sorted(saved)]
+                            st.success(f"✓ บันทึกแล้ว: {', '.join(mlabels)}")
+                            st.balloons()
+                            st.rerun()
+            else:
+                st.info("ใส่ Admin Password เพื่อ upload ข้อมูล")
+
+        with col_side:
+            st.markdown("### คำแนะนำ")
+            st.markdown("""
+**ไฟล์ที่ต้องการ:**
+- Transaction CSV/xlsx (raw data จาก Gowabi)
+- View/CR CSV (optional)
+
+**ระบบจะ:**
+- Auto-detect เดือนจาก `service_created_at`
+- คำนวณ Run Rate สำหรับเดือนที่ยังไม่ครบ
+- คำนวณ 5-pillar scores ทุกร้าน
+            """)
     st.stop()
 
 
