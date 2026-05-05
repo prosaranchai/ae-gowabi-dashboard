@@ -868,8 +868,8 @@ with tab_health:
 
     score_cols = ["Health","SKU","Price","Op","View","CVR"]
     styled = (tbl.style
-        .applymap(css,     subset=score_cols)
-        .applymap(cprio,   subset=["Priority"])
+        .map(css,     subset=score_cols)
+        .map(cprio,   subset=["Priority"])
         .set_properties(**{"font-size":"12px"}))
 
     st.dataframe(styled, use_container_width=True, height=520)
