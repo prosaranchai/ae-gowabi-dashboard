@@ -125,7 +125,8 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         if vcols:
             vdf["avg_view"] = vdf[vcols].replace(0,np.nan).mean(axis=1).fillna(0).round(0)
             vdf["avg_cr"]   = (vdf[crcols].replace(0,np.nan).mean(axis=1).fillna(0)*100).round(2) if crcols else 0
-            view_map = vdf.set_index("shop_id")[["avg_view","avg_cr"]].to_dict("index")
+            vdf_dedup = vdf.sort_values("avg_view", ascending=False).drop_duplicates(subset="shop_id", keep="first")
+            view_map = vdf_dedup.set_index("shop_id")[["avg_view","avg_cr"]].to_dict("index")
 
     # ── Process each month ────────────────────────────────────────────────
     months_found = sorted(df["month_period"].dropna().unique())
