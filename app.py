@@ -1091,25 +1091,119 @@ with tab_action:
     else:
         st.caption(f"เรียงตาม {sort_by}")
 
-    for _, row in action_shops.head(80).iterrows():
-        acts = []
-        if row["sku_score"]   < 30: acts.append(("🔴 เพิ่ม SKU",    f"SKU {int(row['sku_count'])} ต่ำกว่า category เพิ่ม service หรือ package"))
-        if row["price_score"] < 50: acts.append(("🔴 ปรับราคา",     f"ราคาสูงกว่า lowest 12m +{row['price_above']:.0f}% — ลดราคาหรือทำ promo"))
-        if row["op_score"]    < 30: acts.append(("🟡 รักษาลูกค้า",  f"Repeat rate {row['repeat_rate']:.0f}% — เพิ่ม loyalty / follow up"))
-        if row["view_score"]  < 25: acts.append(("🟡 เพิ่ม View",    f"View ต่ำ — เพิ่มรูป/เนื้อหา หรือขอ banner"))
-        if row["cvr_score"]   < 30: acts.append(("🟡 ปรับ CVR",     f"CR% ต่ำ — ตรวจ description, รูป, ราคา, reviews"))
+    # ── Load previous month for MoM comparison ──────────────────────────────
+    all_mk   = sorted(idx_now.keys())
+    prev_mk  = all_mk[all_mk.index(sel_month)-1] if sel_month in all_mk and all_mk.index(sel_month)>0 else None
+    prev_mdata = load_month_data(prev_mk) if prev_mk else None
 
+    # Build prev month shop GMV map: shop_id → gmv
+    prev_shop_map = {}
+    if prev_mdata:
+        for s in prev_mdata.get("shops",[]):
+            prev_shop_map[str(s.get("shop_id_str",""))] = {
+                "gmv": s.get("gmv",0),
+                "total_orders": s.get("total_orders",0),
+                "avg_view": s.get("avg_view",0),
+                "avg_cr": s.get("avg_cr",0),
+            }
+
+    # Build category SKU average map (to say "avg in category is X")
+    cat_sku_avg = {}
+    all_shops_df2 = pd.DataFrame(mdata["shops"])
+    if len(all_shops_df2):
+        cat_sku_avg = all_shops_df2.groupby("category")["sku_count"].mean().round(1).to_dict()
+
+    prev_label = idx_now[prev_mk]["label"] if prev_mk else None
+
+    for _, row in action_shops.head(80).iterrows():
+        shop_id = str(row.get("shop_id_str", row.get("shop_id","")))
+        prev    = prev_shop_map.get(shop_id, {})
+
+        # ── MoM GMV delta ──────────────────────────────────────────────────
+        prev_gmv = prev.get("gmv", 0)
+        if prev_gmv > 0:
+            mom_delta = row["gmv"] - prev_gmv
+            mom_pct   = mom_delta / prev_gmv * 100
+            if mom_pct < -10:
+                mom_str = f"▼ {abs(mom_pct):.0f}% vs {prev_label} (฿{abs(mom_delta)/1e3:.0f}K)"
+                mom_color = "#A32D2D"
+            elif mom_pct > 10:
+                mom_str = f"▲ {mom_pct:.0f}% vs {prev_label}"
+                mom_color = "#3B6D11"
+            else:
+                mom_str = f"ทรงตัว vs {prev_label}"
+                mom_color = "#888"
+        else:
+            mom_str = "ไม่มีข้อมูลเดือนก่อน" if prev_label else ""
+            mom_color = "#aaa"
+
+        # ── Build actions with specific numbers ────────────────────────────
+        acts = []
+
+        if row["sku_score"] < 30:
+            cat_avg = cat_sku_avg.get(row["category"], 0)
+            gap     = max(0, round(cat_avg - row["sku_count"]))
+            acts.append(("🔴 เพิ่ม SKU",
+                f"มี {int(row['sku_count'])} SKUs — avg ของ {row['category']} อยู่ที่ {cat_avg:.0f} SKUs "
+                f"(ขาดอีก ~{gap} SKUs) → เพิ่ม service หรือ package ใหม่"))
+
+        if row["price_score"] < 50:
+            selling = row.get("selling_price_mean", 0)
+            lowest  = row.get("lowest_price_12m",  0)
+            baht_diff = selling - lowest if selling and lowest else 0
+            acts.append(("🔴 ปรับราคา",
+                f"ราคาปัจจุบัน ฿{selling:,.0f} — สูงกว่า lowest 12m ฿{lowest:,.0f} "
+                f"อยู่ +{row['price_above']:.0f}% (฿{baht_diff:,.0f}) → ลดราคาหรือทำ promo"))
+
+        if row["op_score"] < 30:
+            prev_rr = None
+            if prev_mk and prev_mk in prev_shop_map:
+                prev_shop = prev_shop_map.get(shop_id, {})
+                # We don't store repeat_rate in prev_shop_map but can estimate
+            rr = row["repeat_rate"]
+            acts.append(("🟡 รักษาลูกค้า",
+                f"Repeat rate {rr:.0f}% — ลูกค้า {100-rr:.0f}% มาแค่ครั้งเดียว "
+                f"→ ส่ง follow-up / voucher กลับมา"))
+
+        if row["view_score"] < 25:
+            cur_view  = row.get("avg_view", 0)
+            prev_view = prev.get("avg_view", 0)
+            if prev_view > 0 and cur_view > 0:
+                vdiff = cur_view - prev_view
+                vpct  = vdiff / prev_view * 100
+                view_mom = f" ({'+' if vpct>=0 else ''}{vpct:.0f}% vs {prev_label})" if prev_label else ""
+            else:
+                view_mom = ""
+            acts.append(("🟡 เพิ่ม View",
+                f"Page view {cur_view:,.0f}/เดือน{view_mom} — "
+                f"เพิ่มรูปภาพ, ปรับ description, ขอ featured listing หรือ banner"))
+
+        if row["cvr_score"] < 30:
+            cr = row.get("avg_cr", 0)
+            prev_cr = prev.get("avg_cr", 0)
+            if prev_cr > 0 and cr > 0:
+                cr_diff = cr - prev_cr
+                cr_str  = f" ({'+' if cr_diff>=0 else ''}{cr_diff:.2f}% vs {prev_label})"
+            else:
+                cr_str = ""
+            acts.append(("🟡 ปรับ CVR",
+                f"CR% {cr:.2f}%{cr_str} — "
+                f"ตรวจ: รูปภาพ, description, ราคา, reviews และ response time"))
+
+        # ── Render card ────────────────────────────────────────────────────
         priority_color = "#FCEBEB" if row["priority"]=="critical" else "#FAEEDA"
         priority_text  = "#A32D2D" if row["priority"]=="critical" else "#854F0B"
 
         with st.container():
             st.markdown(f"""
-            <div style="background:#fff;border:1px solid #e8e5e0;border-radius:10px;padding:10px 14px;margin-bottom:6px">
+            <div style="background:#fff;border:1px solid #e8e5e0;border-radius:10px;padding:10px 14px;margin-bottom:4px">
               <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:6px">
                 <div style="background:{priority_color};color:{priority_text};font-size:10px;padding:2px 8px;border-radius:8px;font-weight:500;white-space:nowrap;margin-top:1px">{row['priority']}</div>
                 <div style="flex:1">
                   <div style="font-weight:500;font-size:13px">{row['organization_name']}</div>
-                  <div style="font-size:10px;color:#aaa">{row['category']} · {row['kam']} · GMV {fmt_gmv(row['gmv'])}</div>
+                  <div style="font-size:10px;color:#aaa">{row['category']} · {row['kam']} · GMV {fmt_gmv(row['gmv'])}
+                    <span style="color:{mom_color};margin-left:6px">{mom_str}</span>
+                  </div>
                 </div>
                 <div style="text-align:right">
                   <div style="font-size:18px;font-weight:600;color:{sc(row['health_score'])}">{row['health_score']}</div>
