@@ -57,14 +57,31 @@ def db_ensure_table():
 
 def sb_upload(key: str, data_str: str):
     """Store data in Supabase database table (key-value)."""
-    compressed = gzip.compress(data_str.encode("utf-8"), compresslevel=6)
     import base64
+    compressed = gzip.compress(data_str.encode("utf-8"), compresslevel=6)
     b64 = base64.b64encode(compressed).decode("utf-8")
-    get_sb().table("dashboard_kv").upsert({
-        "key": key,
-        "value": b64,
-        "updated_at": datetime.now().isoformat(),
-    }, on_conflict="key").execute()
+    try:
+        get_sb().table("dashboard_kv").upsert({
+            "key": key,
+            "value": b64,
+            "updated_at": datetime.now().isoformat(),
+        }, on_conflict="key").execute()
+    except Exception as e:
+        err_msg = str(e)
+        if "relation" in err_msg.lower() or "does not exist" in err_msg.lower() or "42p01" in err_msg.lower():
+            raise RuntimeError(
+                "❌ Table 'dashboard_kv' ยังไม่ได้สร้างใน Supabase\n\n"
+                "กรุณาไปที่ Supabase → SQL Editor แล้วรัน SQL นี้:\n\n"
+                "create table if not exists dashboard_kv (\n"
+                "  key text primary key,\n"
+                "  value text not null,\n"
+                "  updated_at timestamptz default now()\n"
+                ");\n"
+                "alter table dashboard_kv enable row level security;\n"
+                "create policy \"allow all\" on dashboard_kv\n"
+                "  for all using (true) with check (true);"
+            ) from e
+        raise RuntimeError(f"Supabase error: {err_msg}") from e
 
 def sb_download(key: str) -> bytes:
     """Load data from Supabase database table."""
@@ -295,7 +312,7 @@ def load_index() -> dict:
         return {}
 
 def save_index(idx: dict):
-    sb_upload("index.json", json.dumps(idx, ensure_ascii=False))
+    sb_upload("index.json", json.dumps(idx, ensure_ascii=False, default=str))
 
 @st.cache_data(ttl=60)
 def load_index_cached():
