@@ -13,7 +13,7 @@ Features:
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io, json, calendar
+import io, json, calendar, gzip
 from datetime import datetime, date
 from supabase import create_client
 
@@ -49,14 +49,44 @@ MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 def get_sb():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def sb_upload(key, data_str):
-    get_sb().storage.from_(BUCKET).upload(
-        key, data_str.encode("utf-8"),
-        file_options={"content-type":"application/json","upsert":"true"}
-    )
+def sb_ensure_bucket():
+    """Create bucket if it doesn't exist."""
+    try:
+        get_sb().storage.create_bucket(BUCKET, options={"public": False})
+    except Exception:
+        pass  # bucket already exists
 
-def sb_download(key):
-    return get_sb().storage.from_(BUCKET).download(key)
+def sb_upload(key, data_str: str):
+    """Upload with gzip compression + auto-retry if bucket missing."""
+    compressed = gzip.compress(data_str.encode("utf-8"), compresslevel=6)
+    gzip_key   = key.replace(".json", ".json.gz")
+    sb = get_sb()
+    try:
+        sb.storage.from_(BUCKET).upload(
+            gzip_key, compressed,
+            file_options={"content-type": "application/gzip", "upsert": "true"}
+        )
+    except Exception as e:
+        err_str = str(e).lower()
+        if "not found" in err_str or "does not exist" in err_str:
+            sb_ensure_bucket()
+            sb.storage.from_(BUCKET).upload(
+                gzip_key, compressed,
+                file_options={"content-type": "application/gzip", "upsert": "true"}
+            )
+        else:
+            raise e
+
+def sb_download(key) -> bytes:
+    """Download — tries gzip version first, fallback to plain."""
+    sb = get_sb()
+    gzip_key = key.replace(".json", ".json.gz")
+    try:
+        raw = sb.storage.from_(BUCKET).download(gzip_key)
+        return gzip.decompress(raw)
+    except Exception:
+        # fallback: plain JSON (old format)
+        return sb.storage.from_(BUCKET).download(key)
 
 
 # ─── Run Rate calculation ─────────────────────────────────────────────────────
