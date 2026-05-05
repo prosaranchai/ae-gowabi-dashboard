@@ -41,7 +41,6 @@ REAL_AMS = {"Amm","Aum","Chertam","Fah KAM","Geem","Get KAM",
 EXCLUDED  = {"cancelled","refunded","expired","no_show"}
 PILLAR_COLS  = ["sku_score","price_score","op_score","view_score","cvr_score"]
 PILLAR_NAMES = ["SKU Quality","Price","Operation","View","Conversion"]
-BUCKET = "dashboard-data"
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 # ─── Supabase ─────────────────────────────────────────────────────────────────
@@ -49,44 +48,35 @@ MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 def get_sb():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def sb_ensure_bucket():
-    """Create bucket if it doesn't exist."""
+def db_ensure_table():
+    """Create dashboard_kv table if not exists via RPC or direct insert check."""
     try:
-        get_sb().storage.create_bucket(BUCKET, options={"public": False})
+        get_sb().table("dashboard_kv").select("key").limit(1).execute()
     except Exception:
-        pass  # bucket already exists
+        pass  # Table exists or will be created on first insert
 
-def sb_upload(key, data_str: str):
-    """Upload with gzip compression + auto-retry if bucket missing."""
+def sb_upload(key: str, data_str: str):
+    """Store data in Supabase database table (key-value)."""
     compressed = gzip.compress(data_str.encode("utf-8"), compresslevel=6)
-    gzip_key   = key.replace(".json", ".json.gz")
-    sb = get_sb()
-    try:
-        sb.storage.from_(BUCKET).upload(
-            gzip_key, compressed,
-            file_options={"content-type": "application/gzip", "upsert": "true"}
-        )
-    except Exception as e:
-        err_str = str(e).lower()
-        if "not found" in err_str or "does not exist" in err_str:
-            sb_ensure_bucket()
-            sb.storage.from_(BUCKET).upload(
-                gzip_key, compressed,
-                file_options={"content-type": "application/gzip", "upsert": "true"}
-            )
-        else:
-            raise e
+    import base64
+    b64 = base64.b64encode(compressed).decode("utf-8")
+    get_sb().table("dashboard_kv").upsert({
+        "key": key,
+        "value": b64,
+        "updated_at": datetime.now().isoformat(),
+    }, on_conflict="key").execute()
 
-def sb_download(key) -> bytes:
-    """Download — tries gzip version first, fallback to plain."""
-    sb = get_sb()
-    gzip_key = key.replace(".json", ".json.gz")
-    try:
-        raw = sb.storage.from_(BUCKET).download(gzip_key)
-        return gzip.decompress(raw)
-    except Exception:
-        # fallback: plain JSON (old format)
-        return sb.storage.from_(BUCKET).download(key)
+def sb_download(key: str) -> bytes:
+    """Load data from Supabase database table."""
+    import base64
+    res = get_sb().table("dashboard_kv").select("value").eq("key", key).single().execute()
+    b64 = res.data["value"]
+    compressed = base64.b64decode(b64)
+    return gzip.decompress(compressed)
+
+def sb_delete(key: str):
+    """Delete a key from database."""
+    get_sb().table("dashboard_kv").delete().eq("key", key).execute()
 
 
 # ─── Run Rate calculation ─────────────────────────────────────────────────────
@@ -466,8 +456,10 @@ with st.sidebar:
                             st.warning(f"ยืนยันลบ {info['label']}?")
                             cc1,cc2 = st.columns(2)
                             if cc1.button("✓ ลบ", key=f"yes_{mkey}", type="primary"):
-                                try: get_sb().storage.from_(BUCKET).remove([f"month_{mkey}.json"])
-                                except: pass
+                                try:
+                                    sb_delete(f"month_{mkey}.json")
+                                except Exception:
+                                    pass
                                 idx2.pop(mkey)
                                 save_index(idx2)
                                 load_index_cached.clear(); load_month_data.clear()
