@@ -568,36 +568,44 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         agg2["cat_avg_sku"] = agg2["category"].map(cat_avg_sku).round(1)
         agg2["sku_gap"] = (agg2["cat_avg_sku"] - agg2["sku_count"]).round(1)
 
-        # Demographics breakdown
-        demo = {}
-        # Gender
-        if "gender" in mdf.columns:
-            g = mdf.groupby("gender")["gmv"].sum().reset_index()
-            g["gmv"] = g["gmv"].round(0).astype(int)
-            demo["gender"] = g.to_dict("records")
-        # Age groups
-        if "age" in mdf.columns:
-            mdf2 = mdf.copy()
-            mdf2["age"] = pd.to_numeric(mdf2["age"], errors="coerce")
-            mdf2["age_group"] = pd.cut(mdf2["age"],
+        # Demographics — store per-KAM for filtering at display time
+        mdf3 = mdf.copy()
+        if "age" in mdf3.columns:
+            mdf3["age"] = pd.to_numeric(mdf3["age"], errors="coerce")
+            mdf3["age_group"] = pd.cut(mdf3["age"],
                 bins=[0,24,34,44,54,200],
                 labels=["<25","25–34","35–44","45–54","55+"]
-            ).astype(str).replace("nan","Unknown")
-            ag = mdf2.groupby("age_group")["gmv"].sum().reset_index()
-            ag["gmv"] = ag["gmv"].round(0).astype(int)
-            demo["age"] = ag.to_dict("records")
-        # Payment type
-        if "payment_type" in mdf.columns:
-            pt = mdf.groupby("payment_type")["gmv"].sum().reset_index()
-            pt["gmv"] = pt["gmv"].round(0).astype(int)
-            demo["payment"] = pt.to_dict("records")
-        # Category
-        demo["category"] = cat[["category","gmv"]].to_dict("records")
-        # Subcategory (top 10 by GMV)
-        if "subcategory" in mdf.columns:
-            sc_df = mdf.groupby("subcategory")["gmv"].sum().nlargest(10).reset_index()
-            sc_df["gmv"] = sc_df["gmv"].round(0).astype(int)
-            demo["subcategory"] = sc_df.to_dict("records")
+            ).astype(str)
+            mdf3.loc[mdf3["age_group"].isin(["nan","<NA>"]),"age_group"] = "Unknown"
+
+        def agg_demo(df_sub):
+            d = {}
+            if "gender" in df_sub.columns:
+                g = df_sub.groupby("gender")["gmv"].sum().reset_index()
+                g["gmv"] = g["gmv"].round(0).astype(int)
+                d["gender"] = g.to_dict("records")
+            if "age_group" in df_sub.columns:
+                ag = df_sub[df_sub["age_group"]!="Unknown"].groupby("age_group")["gmv"].sum().reset_index()
+                ag["gmv"] = ag["gmv"].round(0).astype(int)
+                d["age"] = ag.to_dict("records")
+            if "payment_type" in df_sub.columns:
+                pt = df_sub.groupby("payment_type")["gmv"].sum().reset_index()
+                pt["gmv"] = pt["gmv"].round(0).astype(int)
+                d["payment"] = pt.to_dict("records")
+            if "category" in df_sub.columns:
+                ct = df_sub.groupby("category")["gmv"].sum().reset_index()
+                ct["gmv"] = ct["gmv"].round(0).astype(int)
+                d["category"] = ct.to_dict("records")
+            if "subcategory" in df_sub.columns:
+                sc_df = df_sub.groupby("subcategory")["gmv"].sum().nlargest(10).reset_index()
+                sc_df["gmv"] = sc_df["gmv"].round(0).astype(int)
+                d["subcategory"] = sc_df.to_dict("records")
+            return d
+
+        # Total + per-KAM
+        demo = {"all": agg_demo(mdf3)}
+        for kam_name, kam_df in mdf3.groupby("kam"):
+            demo[kam_name] = agg_demo(kam_df)
 
         result["months"][mkey] = {
             "shops":       agg2[list(agg.columns)+["top_sku","top_sku_pct","cat_avg_sku","sku_gap"]].to_dict("records"),
@@ -1653,8 +1661,19 @@ with tab_gmv:
                 st.dataframe(sv, hide_index=True, use_container_width=True, height=320)
 
         # ── Demographics Breakdown ──────────────────────────────────────────
-        st.markdown('<div class="section-title">Demographics & Mix — ' + sel_info["label"] + '</div>', unsafe_allow_html=True)
-        demo_data = mdata.get("demo", {}) if mdata else {}
+        dm1, dm2 = st.columns([1,2])
+        with dm1:
+            demo_month_opts = [idx_now[m]["label"] for m in sorted(idx_now.keys())]
+            demo_month_sel  = st.selectbox("เดือน", demo_month_opts,
+                                            index=demo_month_opts.index(sel_info["label"]) if sel_info["label"] in demo_month_opts else len(demo_month_opts)-1,
+                                            key="demo_month")
+            demo_mk   = next((m for m in idx_now if idx_now[m]["label"]==demo_month_sel), sel_month)
+            demo_mdata = load_month_data(demo_mk) if demo_mk != sel_month else mdata
+        st.markdown(f'<div class="section-title">Demographics & Mix — {demo_month_sel}' + (f' · {gmv_am_filt}' if gmv_am_filt!="ทั้งหมด" else '') + '</div>', unsafe_allow_html=True)
+
+        demo_all  = demo_mdata.get("demo", {}) if demo_mdata else {}
+        # Select KAM slice
+        demo_data = demo_all.get(gmv_am_filt, demo_all.get("all", {})) if demo_all else {}
 
         if not demo_data:
             st.info("Re-upload ข้อมูลเพื่อดู demographics ครับ")
@@ -1687,9 +1706,7 @@ with tab_gmv:
                     paths.append(f'<path d="M{x1:.1f},{y1:.1f} A{r},{r} 0 {large},1 {x2:.1f},{y2:.1f} L{xi2:.1f},{yi2:.1f} A{ri},{ri} 0 {large},0 {xi1:.1f},{yi1:.1f} Z" fill="{col}" opacity="0.9"><title>{row[label_key]}: {pct:.1f}% ({fmt_gmv(v)})</title></path>')
                     angle += sweep
 
-                svg = f'''<svg width="160" height="160" viewBox="0 0 160 160">
-                  <text x="80" y="76" text-anchor="middle" font-size="11" fill="#888">GMV</text>
-                  <text x="80" y="90" text-anchor="middle" font-size="12" font-weight="600" fill="#1a1a1a">{fmt_gmv(total)}</text>
+                svg = f'''<svg width="140" height="140" viewBox="0 0 160 160">
                   {"".join(paths)}
                 </svg>'''
 
