@@ -261,6 +261,56 @@ def sb_delete(key: str):
     """Delete a key from database."""
     get_sb().table("dashboard_kv").delete().eq("key", key).execute()
 
+# ─── Comment system ──────────────────────────────────────────────────────────
+def save_comment(shop_id: str, month: str, kam_name: str, text: str, status: str):
+    """Save a comment for a shop. Key = comments_{shop_id}_{month}"""
+    import base64, gzip as _gz
+    key = f"comments_{shop_id}_{month}"
+    # Load existing
+    try:
+        raw = sb_download(key)
+        existing = json.loads(raw)
+    except Exception:
+        existing = []
+    existing.append({
+        "kam":       kam_name,
+        "text":      text,
+        "status":    status,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    })
+    sb_upload(key, json.dumps(existing, ensure_ascii=False))
+
+def load_comments(shop_id: str, month: str) -> list:
+    """Load comments for a shop."""
+    key = f"comments_{shop_id}_{month}"
+    try:
+        raw = sb_download(key)
+        return json.loads(raw)
+    except Exception:
+        return []
+
+def load_all_comments_for_month(month: str) -> dict:
+    """Load all comments for a month. Returns {shop_id: [comments]}"""
+    try:
+        res = get_sb().table("dashboard_kv").select("key,value").like("key", f"comments_%_{month}").execute()
+        result = {}
+        for row in res.data:
+            shop_id = row["key"].replace(f"comments_","").replace(f"_{month}","")
+            try:
+                import gzip as _gz, base64
+                compressed = base64.b64decode(row["value"])
+                data = json.loads(_gz.decompress(compressed))
+                result[shop_id] = data
+            except Exception:
+                result[shop_id] = []
+        return result
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=30)
+def load_all_comments_cached(month: str) -> dict:
+    return load_all_comments_for_month(month)
+
 
 # ─── Run Rate calculation ─────────────────────────────────────────────────────
 def compute_run_rate(df_month: pd.DataFrame, period: pd.Period) -> dict:
@@ -871,6 +921,15 @@ with st.sidebar:
 
     elif pw:
         st.error("Password ไม่ถูกต้อง")
+    st.markdown("---")
+
+    # ── KAM identity selector ─────────────────────────────────────────────
+    st.markdown("**ฉันคือ**")
+    all_kams_for_sel = ["–"] + sorted(REAL_AMS)
+    my_kam = st.selectbox("เลือกชื่อของคุณ", all_kams_for_sel,
+                           key="my_kam_identity", label_visibility="collapsed")
+    if my_kam != "–":
+        st.caption(f"คุณคือ {my_kam} · comment จะบันทึกชื่อนี้")
     st.markdown("---")
 
     # ── Filters ──────────────────────────────────────────────────────────
@@ -2196,6 +2255,9 @@ with tab_action:
     else:
         st.caption(f"เรียงตาม {sort_by}")
 
+    # ── Load all comments for this month ────────────────────────────────────
+    all_comments_cache = load_all_comments_cached(sel_month)
+
     # ── Load previous month for MoM comparison ──────────────────────────────
     all_mk   = sorted(idx_now.keys())
     prev_mk  = all_mk[all_mk.index(sel_month)-1] if sel_month in all_mk and all_mk.index(sel_month)>0 else None
@@ -2567,6 +2629,72 @@ with tab_portfolio:
                 top10_growth = pf_df_valid.nlargest(10,"gmv_pct")
                 top10_drop   = pf_df_valid.nsmallest(10,"gmv_pct")
 
+                # ── Load service-level data for SKU breakdown ─────────────────
+                cur_svc_df  = pd.DataFrame(cur_md.get("svc_perf",  []))
+                prev_svc_df = pd.DataFrame(prev_md.get("svc_perf", []))
+
+                def get_sku_breakdown(shop_id, n=5):
+                    """Top N services by |GMV change| for a shop."""
+                    if len(cur_svc_df) == 0: return []
+                    c = cur_svc_df[cur_svc_df["shop_id_s"]==shop_id].copy()
+                    if len(c) == 0: return []
+                    if len(prev_svc_df):
+                        p = prev_svc_df[prev_svc_df["shop_id_s"]==shop_id].set_index("service_name")
+                    else:
+                        p = pd.DataFrame()
+                    rows = []
+                    for _, sc_row in c.iterrows():
+                        svc   = sc_row["service_name"]
+                        c_gmv = float(sc_row.get("gmv",0))
+                        c_sell= float(sc_row.get("sell",0))
+                        c_ord = int(sc_row.get("orders",0))
+                        if len(p) and svc in p.index:
+                            pr    = p.loc[svc]
+                            p_gmv = float(pr.get("gmv",0))
+                            p_sell= float(pr.get("sell",0))
+                        else:
+                            p_gmv=0; p_sell=0
+                        rows.append({
+                            "svc":    svc,
+                            "c_gmv":  c_gmv, "p_gmv":  p_gmv,
+                            "c_sell": c_sell, "p_sell": p_sell,
+                            "orders": c_ord,
+                            "is_new": p_gmv == 0 and c_gmv > 0,
+                        })
+                    rows.sort(key=lambda x: abs(x["c_gmv"]-x["p_gmv"]), reverse=True)
+                    return rows[:n]
+
+                def render_sku_breakdown(skus):
+                    if not skus: return ""
+                    lines = []
+                    for s in skus:
+                        name  = s["svc"][:40] + ("…" if len(s["svc"])>40 else "")
+                        gd    = s["c_gmv"] - s["p_gmv"]
+                        pd_   = s["c_sell"] - s["p_sell"]
+                        g_col = "#16A34A" if gd >= 0 else "#DC2626"
+                        g_sym = "▲" if gd >= 0 else "▼"
+                        g_str = f"{g_sym}฿{abs(int(gd)):,}"
+                        p_str = ""
+                        if pd_ != 0:
+                            p_col = "#DC2626" if pd_ > 0 else "#16A34A"
+                            p_sym = "▲" if pd_ > 0 else "▼"
+                            p_str = f'<span style="color:{p_col};font-size:9px;margin-left:4px">ราคา {p_sym}฿{abs(int(pd_)):,}</span>'
+                        new_badge = ' <span style="font-size:8px;background:#EFF6FF;color:#2563EB;padding:1px 4px;border-radius:2px">NEW</span>' if s["is_new"] else ""
+                        lines.append(
+                            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                            f'padding:3px 0;border-bottom:1px solid #f5f5f5;font-size:10px">'
+                            f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{name}{new_badge}</span>'
+                            f'<span style="color:{g_col};font-weight:600;white-space:nowrap;margin-left:8px">{g_str}</span>'
+                            f'{p_str}</div>'
+                        )
+                    return (
+                        '<div style="margin-top:6px;padding:8px 10px;background:#F8FAFF;'
+                        'border-radius:6px;border:1px solid #E8F0FE">'
+                        '<div style="font-size:9px;font-weight:600;color:#3B8BD4;text-transform:uppercase;'
+                        'letter-spacing:.06em;margin-bottom:4px">Service Breakdown</div>'
+                        + "".join(lines) + '</div>'
+                    )
+
                 # ── Generate auto-comment ─────────────────────────────────────
                 def gen_comment(row):
                     tips = []
@@ -2612,6 +2740,8 @@ with tab_portfolio:
                         price_color = "#DC2626" if row["price_above"]>30 else "#D97706" if row["price_above"]>15 else "#16A34A"
                         price_str   = f'+{row["price_above"]:.0f}%' if row["price_above"]>0 else "✓ ดี"
 
+                        skus     = get_sku_breakdown(row.get("shop_id",""))
+                        sku_html = render_sku_breakdown(skus)
                         st.markdown(f"""
 <div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:8px;page-break-inside:avoid">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -2651,6 +2781,7 @@ with tab_portfolio:
   <div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 4px 4px 0;padding:6px 10px;font-size:11px;color:#555">
     💡 {comment}
   </div>
+  {sku_html}
 </div>""", unsafe_allow_html=True)
 
                 # ── Header ────────────────────────────────────────────────────
