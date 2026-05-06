@@ -634,8 +634,24 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         svc_price_table  = svc_all[svc_all["pct"] > 0].sort_values("pct", ascending=False)
 
         # Full service performance (all services, not just overpriced)
-        svc_perf = svc_all.copy()
-        svc_perf["basket"] = (svc_perf["gmv"] / svc_perf["orders"].replace(0,np.nan)).round(0).fillna(0).astype(int)
+        # Rebuild svc_perf with richer price stats
+        svc_perf = mdf.groupby(["shop_id_s","organization_name","kam","category","service_name"]).agg(
+            gmv    = ("gmv",            "sum"),
+            orders = ("booking_id",     "count"),
+            sell_mean = ("selling_price","mean"),
+            sell_min  = ("selling_price","min"),
+            sell_max  = ("selling_price","max"),
+            low12  = ("lowest_price_12m","mean"),
+        ).reset_index()
+        svc_perf["sell_mean"] = svc_perf["sell_mean"].round(0)
+        svc_perf["sell_min"]  = svc_perf["sell_min"].round(0)
+        svc_perf["sell_max"]  = svc_perf["sell_max"].round(0)
+        svc_perf["low12"]     = svc_perf["low12"].round(0)
+        svc_perf["gmv"]       = svc_perf["gmv"].round(0).astype(int)
+        svc_perf["basket"]    = (svc_perf["gmv"] / svc_perf["orders"].replace(0,np.nan)).round(0).fillna(0).astype(int)
+        # Keep sell as mean for backward compat
+        svc_perf["sell"]      = svc_perf["sell_mean"]
+        svc_perf["pct"]       = ((svc_perf["sell_mean"]-svc_perf["low12"])/svc_perf["low12"].replace(0,np.nan)*100).round(1).fillna(0)
 
         # Shop SKU concentration: % GMV from top-1 SKU per shop
         shop_top_sku = svc_all.sort_values("gmv",ascending=False).groupby("shop_id_s").first().reset_index()[["shop_id_s","service_name","gmv"]]
@@ -695,7 +711,8 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
             "svc_price":   svc_price_table[["shop_id_s","organization_name","kam","category",
                                              "service_name","sell","low12","pct","gmv","orders"]].to_dict("records"),
             "svc_perf":    svc_perf[["shop_id_s","organization_name","kam","category",
-                                      "service_name","gmv","orders","basket","sell","low12","pct"]].to_dict("records"),
+                                      "service_name","gmv","orders","basket",
+                                      "sell","sell_min","sell_max","low12","pct"]].to_dict("records"),
         }
 
     # ── Cross-month trend: KAM ────────────────────────────────────────────
@@ -2654,12 +2671,21 @@ with tab_portfolio:
                             p_sell= float(pr.get("sell",0))
                         else:
                             p_gmv=0; p_sell=0
+                        c_sell_min = float(sc_row.get("sell_min", c_sell))
+                        c_sell_max = float(sc_row.get("sell_max", c_sell))
+                        if len(p) and svc in p.index:
+                            p_sell_min = float(pr.get("sell_min", p_sell))
+                            p_sell_max = float(pr.get("sell_max", p_sell))
+                        else:
+                            p_sell_min = 0; p_sell_max = 0
                         rows.append({
-                            "svc":    svc,
-                            "c_gmv":  c_gmv, "p_gmv":  p_gmv,
-                            "c_sell": c_sell, "p_sell": p_sell,
-                            "orders": c_ord,
-                            "is_new": p_gmv == 0 and c_gmv > 0,
+                            "svc":       svc,
+                            "c_gmv":     c_gmv,      "p_gmv":     p_gmv,
+                            "c_sell":    c_sell,      "p_sell":    p_sell,
+                            "c_sell_min":c_sell_min,  "c_sell_max":c_sell_max,
+                            "p_sell_min":p_sell_min,  "p_sell_max":p_sell_max,
+                            "orders":    c_ord,
+                            "is_new":    p_gmv == 0 and c_gmv > 0,
                         })
                     rows.sort(key=lambda x: abs(x["c_gmv"]-x["p_gmv"]), reverse=True)
                     return rows[:n]
