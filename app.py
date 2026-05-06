@@ -2042,14 +2042,16 @@ with tab_gmv:
 
             # Row 3: Subcategory (full width)
             if "subcategory" in demo_data:
-                st.markdown('<div class="section-title" style="margin-top:8px">Top Subcategories</div>', unsafe_allow_html=True)
-                sub_rows = demo_data["subcategory"]
+                st.markdown(f'<div class="section-title" style="margin-top:8px">Top Subcategories — {demo_month_sel}' + (f' · {gmv_am_filt}' if gmv_am_filt!="ทั้งหมด" else '') + '</div>', unsafe_allow_html=True)
+                # Use KAM-filtered demo_data if available
+                sub_rows = demo_data.get("subcategory", [])
                 total_sub = sum(r["gmv"] for r in sub_rows)
-                sub_tbl   = pd.DataFrame(sub_rows).sort_values("gmv",ascending=False)
-                sub_tbl["GMV"]   = sub_tbl["gmv"].apply(fmt_gmv)
-                sub_tbl["Share"] = (sub_tbl["gmv"]/total_sub*100).round(1).apply(lambda x: f"{x:.1f}%")
-                sub_tbl = sub_tbl[["subcategory","GMV","Share"]].rename(columns={"subcategory":"Subcategory"})
-                st.dataframe(sub_tbl, hide_index=True, use_container_width=True, height=280)
+                if total_sub > 0:
+                    sub_tbl   = pd.DataFrame(sub_rows).sort_values("gmv",ascending=False)
+                    sub_tbl["GMV"]   = sub_tbl["gmv"].apply(fmt_gmv)
+                    sub_tbl["Share"] = (sub_tbl["gmv"]/total_sub*100).round(1).apply(lambda x: f"{x:.1f}%")
+                    sub_tbl = sub_tbl[["subcategory","GMV","Share"]].rename(columns={"subcategory":"Subcategory"})
+                    st.dataframe(sub_tbl, hide_index=True, use_container_width=True, height=min(400, 44+len(sub_tbl)*36))
 
 
 # ══ TAB 2: Category ════════════════════════════════════════════════════════════
