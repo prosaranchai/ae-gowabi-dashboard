@@ -2257,10 +2257,10 @@ with tab_action:
     with f_col3:
         issue_opts = [
             "ทั้งหมด",
-            "🔴 ราคาแพงเกิน (Price)",
-            "🔴 SKU น้อย",
-            "🟡 View ลด",
-            "🟡 CVR ลด",
+            "🔴 Price",
+            "🔴 SKU",
+            "🟡 View",
+            "🟡 CVR",
         ]
         issue_filter = st.selectbox("Filter by Issue", issue_opts,
                                      key="action_issue_dd", label_visibility="visible")
@@ -2276,13 +2276,13 @@ with tab_action:
     if shop_filter != "ทั้งหมด":
         action_shops = action_shops[action_shops["organization_name"]==shop_filter]
     if issue_filter != "ทั้งหมด":
-        if "ราคา" in issue_filter:
+        if "Price" in issue_filter:
             action_shops = action_shops[action_shops["price_score"] < 50]
-        elif "SKU" in issue_filter:
+        elif issue_filter == "🔴 SKU":
             action_shops = action_shops[action_shops["sku_score"] < 30]
-        elif "View" in issue_filter:
+        elif issue_filter == "🟡 View":
             action_shops = action_shops[action_shops["view_score"] < 40]
-        elif "CVR" in issue_filter:
+        elif issue_filter == "🟡 CVR":
             action_shops = action_shops[action_shops["cvr_score"] < 40]
 
     # Apply sort
