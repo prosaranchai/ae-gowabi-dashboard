@@ -2563,6 +2563,8 @@ with tab_portfolio:
     pf_keys = sorted(idx_now.keys())
     pf_prev_mk = pf_keys[pf_keys.index(pf_mk)-1] if pf_keys.index(pf_mk) > 0 else None
     pf_prev_lbl = idx_now[pf_prev_mk]["label"] if pf_prev_mk else None
+    pf_cov      = idx_now[pf_mk]["stats"].get("coverage_pct", 100) / 100
+    pf_is_rr    = not idx_now[pf_mk]["stats"].get("is_complete", True)
 
     if not pf_prev_mk:
         st.info("ต้องมีข้อมูลอย่างน้อย 2 เดือนเพื่อดู Portfolio Review ครับ")
