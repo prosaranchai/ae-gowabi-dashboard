@@ -517,6 +517,11 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         am["new_customers"]    = am["new_customers"].fillna(0).astype(int)
         am["total_orders"]     = am["total_orders"].fillna(0).astype(int)
         am["basket_size"]      = (am["gmv"] / am["unique_customers"].replace(0,1)).round(0).astype(int)
+        # total_page_view = SUM of avg_view per shop (not mean of mean)
+        am_view_sum = agg.groupby("kam")["avg_view"].sum().round(0).astype(int).reset_index()
+        am_view_sum.columns = ["kam","total_page_view"]
+        am = am.merge(am_view_sum, on="kam", how="left")
+        am["total_page_view"] = am["total_page_view"].fillna(0).astype(int)
 
         # Category stats
         cat = mdf.groupby("category").agg(
@@ -526,6 +531,9 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         cat["gmv"] = cat["gmv"].round(0).astype(int)
 
         # Monthly stats
+        # Which months have view data
+        has_view_for_month = mkey in view_map_by_month if view_map_by_month else False
+
         monthly_stat = {
             "month":           mkey,
             "label":           MONTH_LABELS[period.month-1] + " " + str(period.year),
@@ -539,6 +547,7 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
             "unique_customers":int(mdf["user_id"].nunique()),
             "new_customers":   int(mdf["is_new"].sum()),
             "use_real_view":   use_real,
+            "has_view_data":   has_view_for_month,
         }
 
         # Build full service-level price table for Price pillar drill-down
@@ -1128,16 +1137,18 @@ with tab_ov:
             for _, pa in prev_am_df.iterrows():
                 psh = prev_sh_df[prev_sh_df["kam"]==pa["kam"]]
                 p_orders = int(pa.get("unique_customers", 0)) if "unique_customers" in pa else (psh["unique_customers"].sum() if "unique_customers" in psh.columns else 0)
-                p_view   = psh["avg_view"].mean()    if "avg_view"   in psh.columns else 0
+                p_view   = float(pa.get("total_page_view", psh["avg_view"].sum() if "avg_view" in psh.columns else 0))
                 # Run rate adjust if prev month was incomplete
                 p_gmv_rr = pa["gmv"] / prev_cov if prev_is_rr2 and prev_cov > 0 else pa["gmv"]
                 p_orders = int(pa.get("total_orders", p_orders))  # prefer AM-level total_orders
                 p_ord_rr = p_orders / prev_cov if prev_is_rr2 and prev_cov > 0 else p_orders
                 p_view_rr= p_view    / prev_cov if prev_is_rr2 and prev_cov > 0 else p_view
+                p_cr_am  = float(pa.get("avg_cr_pct", 0)) if "avg_cr_pct" in pa else float(psh["avg_cr"].mean() if "avg_cr" in psh.columns else 0)
                 prev_am_map[pa["kam"]] = {
                     "gmv":    p_gmv_rr,
                     "orders": p_ord_rr,
                     "view":   p_view_rr,
+                    "cr":     p_cr_am,
                 }
 
     def delta_html(curr, prev_val, fmt_fn=None, suffix=""):
@@ -1169,7 +1180,7 @@ with tab_ov:
         basket_size = int(r["gmv"] / am_orders) if am_orders > 0 else 0
 
         # View/CVR from AM summary (new format)
-        avg_page_view = float(r.get("avg_page_view", 0))
+        avg_page_view = float(r.get("total_page_view", r.get("avg_page_view", 0)))
         avg_cr        = float(r.get("avg_cr_pct", 0))
 
         # Run rate
@@ -1192,9 +1203,13 @@ with tab_ov:
 
         # Helper: metric cell HTML
         # Pre-compute all metric cells before embedding in HTML
-        def mk_cell(label, main_val, rr_val=None, prev_val=None, color="inherit"):
-            rr_part = (f'<div style="font-size:9px;color:#185FA5;margin-top:1px">RR {fmt_gmv(rr_val)}</div>'
-                       if rr_val and ov_is_rr else "")
+        def mk_cell(label, main_val, rr_val=None, prev_val=None, color="inherit", rr_fmt=None):
+            """rr_fmt: callable to format rr_val, defaults to fmt_gmv"""
+            if rr_val and ov_is_rr:
+                rr_display = rr_fmt(rr_val) if rr_fmt else fmt_gmv(rr_val)
+                rr_part    = f'<div style="font-size:9px;color:#185FA5;margin-top:1px">RR {rr_display}</div>'
+            else:
+                rr_part = ""
             d_part  = delta_html(rr_val or main_val, prev_val) if prev_val else ""
             return (
                 '<div style="background:#fafafa;border-radius:6px;padding:9px 10px;text-align:center;border:1px solid #f0f0f0">'
@@ -1209,15 +1224,26 @@ with tab_ov:
             c_ord    = mk_cell("Orders",      "–  (re-upload)", color="#bbb")
             c_basket = mk_cell("Basket Size", "–")
             c_new    = mk_cell("New User",    "–")
-            c_view   = mk_cell("Shop View",   f"{avg_page_view:,.0f}" if avg_page_view else "–",
-                               rr_val=view_rr if avg_page_view else None, prev_val=p_view or None)
-            c_cvr    = mk_cell("CVR",         f"{avg_cr:.2f}%" if avg_cr else "–", color=sc(r["avg_cvr"]) if avg_cr else "#bbb")
+            p_cr_val2 = prev_am.get("cr", 0)
+            c_view   = mk_cell("Shop View", f"{avg_page_view:,.0f}" if avg_page_view else "–",
+                               rr_val=view_rr if avg_page_view else None,
+                               prev_val=p_view or None,
+                               rr_fmt=lambda v: f"{int(v):,}")
+            c_cvr    = mk_cell("CVR",       f"{avg_cr:.2f}%" if avg_cr else "–",
+                               prev_val=p_cr_val2 or None,
+                               color=sc(r["avg_cvr"]) if avg_cr else "#bbb")
         else:
             c_ord    = mk_cell("Orders",      f"{am_orders:,}",        rr_val=am_orders_rr, prev_val=p_ord or None)
             c_basket = mk_cell("Basket Size", f"฿{basket_size:,}")
             c_new    = mk_cell("New User",    f"{new_cust:,}")
-            c_view   = mk_cell("Shop View",   f"{avg_page_view:,.0f}", rr_val=view_rr, prev_val=p_view or None)
-            c_cvr    = mk_cell("CVR",         f"{avg_cr:.2f}%",        color=sc(r["avg_cvr"]))
+            p_cr_val = prev_am.get("cr", 0)
+            c_view   = mk_cell("Shop View", f"{avg_page_view:,.0f}",
+                               rr_val=view_rr if avg_page_view else None,
+                               prev_val=p_view or None,
+                               rr_fmt=lambda v: f"{int(v):,}")  # no ฿ for view count
+            c_cvr    = mk_cell("CVR",       f"{avg_cr:.2f}%",
+                               prev_val=p_cr_val or None,
+                               color=sc(r["avg_cvr"]))
 
         cells_html = c_gmv + c_ord + c_basket + c_new + c_view + c_cvr
 
@@ -1261,42 +1287,65 @@ with tab_ov:
                     if len(prev_df):
                         prev_am_shops = prev_df[prev_df["kam"]==r["kam"]].set_index("shop_id_s")
 
-            # Build comparison table: GMV, Orders, Shop View, CVR — cur vs prev
+            # Coverage for run rate
+            cur_cov  = idx_now[ov_mk]["stats"].get("coverage_pct",100) / 100
+            prev_cov2= idx_now[prev_ov_mk]["stats"].get("coverage_pct",100) / 100 if prev_ov_mk else 1.0
+            cur_inc  = not idx_now[ov_mk]["stats"].get("is_complete",True)
+            prev_inc2= not idx_now[prev_ov_mk]["stats"].get("is_complete",True) if prev_ov_mk else False
+
+            def rr(val, cov, is_inc):
+                """Apply run rate if month incomplete."""
+                return val / cov if is_inc and cov > 0 and val > 0 else val
+
+            def fmt_rr(val, cov, is_inc, fmt_fn):
+                base = fmt_fn(val)
+                if is_inc and cov > 0 and val > 0:
+                    return f"{base} (RR {fmt_fn(val/cov)})"
+                return base
+
+            def chg_rr(c, pv, c_cov, c_inc, p_cov, p_inc):
+                """% change using run rate for both sides."""
+                c_rr = rr(c,  c_cov, c_inc)
+                p_rr = rr(pv, p_cov, p_inc)
+                if p_rr == 0: return "–"
+                d = (c_rr - p_rr) / p_rr * 100
+                col = "▲" if d>=0 else "▼"
+                return f"{col}{abs(d):.0f}%"
+
+            # Build comparison table
             rows_cmp = []
             for _, sh in am_shops_drill.iterrows():
                 sid   = sh.get("shop_id_s", "")
                 p     = prev_am_shops.loc[sid] if (len(prev_am_shops) and sid in prev_am_shops.index) else None
 
-                c_gmv  = int(sh.get("gmv", 0))
-                c_ord  = int(sh.get("total_orders", 0))
+                c_gmv  = float(sh.get("gmv", 0))
+                c_ord  = float(sh.get("total_orders", 0))
                 c_view = float(sh.get("avg_view", 0))
                 c_cr   = float(sh.get("avg_cr", 0))
 
-                p_gmv  = int(p.get("gmv", 0))         if p is not None else None
-                p_ord  = int(p.get("total_orders", 0)) if p is not None else None
-                p_view = float(p.get("avg_view", 0))   if p is not None else None
-                p_cr   = float(p.get("avg_cr", 0))     if p is not None else None
+                p_gmv  = float(p.get("gmv", 0))          if p is not None else None
+                p_ord  = float(p.get("total_orders", 0))  if p is not None else None
+                p_view = float(p.get("avg_view", 0))      if p is not None else None
+                p_cr   = float(p.get("avg_cr", 0))        if p is not None else None
 
-                def chg(c, pv):
-                    if pv is None or pv == 0: return "–"
-                    d = (c - pv) / pv * 100
-                    return f"{'▲' if d>=0 else '▼'}{abs(d):.0f}%"
+                lbl_cur  = f"{ov_month_sel}" + (" (RR)" if cur_inc else "")
+                lbl_prev = prev_ov_lbl or "–"
 
                 row = {
-                    "Shop": sh.get("organization_name",""),
+                    "Shop":     sh.get("organization_name",""),
                     "Category": sh.get("category",""),
-                    f"GMV {ov_month_sel}":      fmt_gmv(c_gmv),
-                    f"GMV {prev_ov_lbl or '–'}": fmt_gmv(p_gmv) if p_gmv is not None else "–",
-                    "GMV Δ":   chg(c_gmv, p_gmv),
-                    f"Orders {ov_month_sel}":    f"{c_ord:,}",
-                    f"Orders {prev_ov_lbl or '–'}": f"{p_ord:,}" if p_ord is not None else "–",
-                    "Orders Δ": chg(c_ord, p_ord),
-                    f"View {ov_month_sel}":      f"{c_view:,.0f}",
-                    f"View {prev_ov_lbl or '–'}": f"{p_view:,.0f}" if p_view is not None else "–",
-                    "View Δ":   chg(c_view, p_view),
-                    f"CVR {ov_month_sel}":       f"{c_cr:.2f}%",
-                    f"CVR {prev_ov_lbl or '–'}":  f"{p_cr:.2f}%" if p_cr is not None else "–",
-                    "CVR Δ":    chg(c_cr, p_cr),
+                    f"GMV {lbl_cur}":    fmt_rr(c_gmv,  cur_cov,  cur_inc,  fmt_gmv),
+                    f"GMV {lbl_prev}":   fmt_rr(p_gmv,  prev_cov2,prev_inc2,fmt_gmv) if p_gmv is not None else "–",
+                    "GMV Δ":    chg_rr(c_gmv,  p_gmv,  cur_cov, cur_inc, prev_cov2, prev_inc2) if p_gmv  is not None else "–",
+                    f"Orders {lbl_cur}": fmt_rr(c_ord,  cur_cov,  cur_inc,  lambda v: f"{int(v):,}"),
+                    f"Orders {lbl_prev}":fmt_rr(p_ord,  prev_cov2,prev_inc2,lambda v: f"{int(v):,}") if p_ord  is not None else "–",
+                    "Orders Δ": chg_rr(c_ord,  p_ord,  cur_cov, cur_inc, prev_cov2, prev_inc2) if p_ord  is not None else "–",
+                    f"View {lbl_cur}":   fmt_rr(c_view, cur_cov, cur_inc, lambda v: f"{int(v):,}") if idx_now[ov_mk]["stats"].get("has_view_data") else "–",
+                    f"View {lbl_prev}":  (fmt_rr(p_view, prev_cov2, prev_inc2, lambda v: f"{int(v):,}") if (p_view is not None and prev_ov_mk and idx_now[prev_ov_mk]["stats"].get("has_view_data")) else "–"),
+                    "View Δ":   (chg_rr(c_view, p_view, cur_cov, cur_inc, prev_cov2, prev_inc2) if (p_view is not None and idx_now[ov_mk]["stats"].get("has_view_data") and prev_ov_mk and idx_now[prev_ov_mk]["stats"].get("has_view_data")) else "–"),
+                    f"CVR {lbl_cur}":    f"{c_cr:.2f}%" if idx_now[ov_mk]["stats"].get("has_view_data") else "–",
+                    f"CVR {lbl_prev}":   (f"{p_cr:.2f}%" if (p_cr is not None and prev_ov_mk and idx_now[prev_ov_mk]["stats"].get("has_view_data")) else "–"),
+                    "CVR Δ":    (chg_rr(c_cr, p_cr, 1, False, 1, False) if (p_cr is not None and idx_now[ov_mk]["stats"].get("has_view_data") and prev_ov_mk and idx_now[prev_ov_mk]["stats"].get("has_view_data")) else "–"),
                 }
                 rows_cmp.append(row)
 
