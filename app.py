@@ -194,11 +194,15 @@ hr { border: none; border-top: 1px solid #ebebeb; margin: 1rem 0 }
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 REAL_AMS = {
+    # Core AMs
     "Mameaw","Chertam","Geem","Wan","Pui","Fah KAM","Seeiw","Amm",
-    "UN","VPM","Nahm","Aum","THINEEKARN BD","Get KAM","Samir","Lanna",
-    "Temporarily closed","Puinoon","Permanently closed","Kittitut BD",
-    "Pym","Femille","Pop SSU","Amm Junior","End Contract ","Sasithorn BD",
-    "Peerawat Dangsupa","Amy","Muk BD","Phornphannarai","SSU","No owner","Invalid",
+    "Nahm","Aum","Get KAM","Puinoon",
+    # Additional AMs
+    "THINEEKARN BD","Samir","Lanna","Kittitut BD",
+    "Pym","Femille","Pop SSU","Amm Junior","Sasithorn BD",
+    "Peerawat Dangsupa","Amy","Muk BD","Phornphannarai",
+    # Non-personal accounts excluded: UN, VPM, SSU, No owner,
+    # Temporarily closed, Permanently closed, End Contract, Invalid
 }
 EXCLUDED  = {"cancelled","refunded","expired","no_show"}
 PILLAR_COLS  = ["sku_score","price_score","view_score","cvr_score"]
@@ -400,13 +404,24 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
 
         agg["overpriced_svcs"] = agg["shop_id_s"].map(lambda x: overpriced_map.get(x, []))
 
-        # Merge view data
+        # Merge view data — use this month's data specifically, fallback to avg
         use_real = False
-        if view_map:
-            agg["avg_view"] = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_view",0))
-            agg["avg_cr"]   = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_cr",0))
-            agg["avg_view"] = agg["avg_view"].fillna(0)
-            agg["avg_cr"]   = agg["avg_cr"].fillna(0)
+        if view_map_by_month:
+            # Use current month's view data if available, else avg
+            cur_view_for_month = view_map_by_month.get(mkey, {})
+            if cur_view_for_month:
+                agg["avg_view"] = agg["shop_id_s"].map(lambda x: cur_view_for_month.get(x,{}).get("view",0)).fillna(0)
+                agg["avg_cr"]   = (agg["shop_id_s"].map(lambda x: cur_view_for_month.get(x,{}).get("cr",0)) * 100).fillna(0)
+            elif view_map:
+                agg["avg_view"] = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_view",0)).fillna(0)
+                agg["avg_cr"]   = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_cr",0)).fillna(0)
+            else:
+                agg["avg_view"] = 0.0
+                agg["avg_cr"]   = 0.0
+            use_real = (agg["avg_view"] > 0).sum() > 50
+        elif view_map:
+            agg["avg_view"] = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_view",0)).fillna(0)
+            agg["avg_cr"]   = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_cr",0)).fillna(0)
             use_real = (agg["avg_view"] > 0).sum() > 50
         else:
             agg["avg_view"] = 0.0
@@ -709,6 +724,8 @@ def save_trend(data: dict):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 def sc(v): return "#E24B4A" if v<40 else "#EF9F27" if v<60 else "#639922"
 def fmt_gmv(v, rr=False):
+    try: v = float(v)
+    except: return "–"
     s = f"฿{v/1e6:.1f}M" if v>=1e6 else f"฿{v/1e3:.0f}K" if v>=1e3 else f"฿{int(v)}"
     if rr: s += " (RR)"
     return s
@@ -1302,11 +1319,20 @@ with tab_ov:
                 """Apply run rate if month incomplete."""
                 return val / cov if is_inc and cov > 0 and val > 0 else val
 
+            def fmt_full(v):
+                """Full number no abbreviation."""
+                return f"฿{int(v):,}" if v >= 0 else f"-฿{int(abs(v)):,}"
+
             def fmt_rr(val, cov, is_inc, fmt_fn):
-                base = fmt_fn(val)
+                """Show actual + RR in full numbers."""
+                actual_str = fmt_fn(val)
                 if is_inc and cov > 0 and val > 0:
-                    return f"{base} (RR {fmt_fn(val/cov)})"
-                return base
+                    return f"{actual_str}  (RR {fmt_fn(val/cov)})"
+                return actual_str
+
+            # Always use fmt_full for prev GMV too
+            def fmt_prev_gmv(v):
+                return fmt_full(v)
 
             def chg_rr(c, pv, c_cov, c_inc, p_cov, p_inc):
                 """% change using run rate for both sides."""
@@ -1339,8 +1365,8 @@ with tab_ov:
                 row = {
                     "Shop":     sh.get("organization_name",""),
                     "Category": sh.get("category",""),
-                    f"GMV {lbl_cur}":    fmt_rr(c_gmv,  cur_cov,  cur_inc,  fmt_gmv),
-                    f"GMV {lbl_prev}":   fmt_rr(p_gmv,  prev_cov2,prev_inc2,fmt_gmv) if p_gmv is not None else "–",
+                    f"GMV {lbl_cur}":    fmt_rr(c_gmv,  cur_cov,  cur_inc,  fmt_full),
+                    f"GMV {lbl_prev}":   fmt_rr(p_gmv,  prev_cov2,prev_inc2,fmt_prev_gmv) if p_gmv is not None else "–",
                     "GMV Δ":    chg_rr(c_gmv,  p_gmv,  cur_cov, cur_inc, prev_cov2, prev_inc2) if p_gmv  is not None else "–",
                     f"Orders {lbl_cur}": fmt_rr(c_ord,  cur_cov,  cur_inc,  lambda v: f"{int(v):,}"),
                     f"Orders {lbl_prev}":fmt_rr(p_ord,  prev_cov2,prev_inc2,lambda v: f"{int(v):,}") if p_ord  is not None else "–",
