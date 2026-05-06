@@ -1250,37 +1250,71 @@ with tab_ov:
             am_shops_drill = shops_src[shops_src["kam"] == r["kam"]].copy() if ov_am_sel == "ทั้งหมด" else shops_src.copy()
             am_shops_drill = am_shops_drill.sort_values("health_score")
 
-            drill_cols = {
-                "organization_name":"Shop","category":"Category",
-                "total_orders":"Orders","gmv":"GMV","health_score":"Health",
-                "sku_score":"SKU","price_score":"Price",
-                "view_score":"View","cvr_score":"CVR","priority":"Priority","alerts":"Alerts"
-            }
-            avail = [c for c in drill_cols if c in am_shops_drill.columns]
-            tbl   = am_shops_drill[avail].rename(columns=drill_cols).copy()
-            tbl["GMV"]    = tbl["GMV"].apply(fmt_gmv)
-            tbl["Health"] = tbl["Health"].apply(lambda x: f"{x:.1f}")
-            for sc_col in ["SKU","Price","View","CVR"]:
-                if sc_col in tbl.columns:
-                    tbl[sc_col] = tbl[sc_col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "–")
+            # Load prev month shop data for this AM
+            prev_ov_mk  = all_mk_ov[all_mk_ov.index(ov_mk)-1] if ov_mk in all_mk_ov and all_mk_ov.index(ov_mk)>0 else None
+            prev_ov_lbl = idx_now[prev_ov_mk]["label"] if prev_ov_mk else None
+            prev_am_shops = pd.DataFrame()
+            if prev_ov_mk:
+                prev_ov_md = load_month_data(prev_ov_mk)
+                if prev_ov_md:
+                    prev_df = pd.DataFrame(prev_ov_md.get("shops",[]))
+                    if len(prev_df):
+                        prev_am_shops = prev_df[prev_df["kam"]==r["kam"]].set_index("shop_id_s")
 
-            def _css(v):
-                try: return f"color:{sc(float(v))};font-weight:500"
-                except: return ""
-            def _cprio(v):
-                return {"critical":"background:#FEF2F2;color:#DC2626",
-                        "warning":"background:#FFFBEB;color:#D97706",
-                        "healthy":"background:#F0FDF4;color:#16A34A"}.get(str(v),"")
+            # Build comparison table: GMV, Orders, Shop View, CVR — cur vs prev
+            rows_cmp = []
+            for _, sh in am_shops_drill.iterrows():
+                sid   = sh.get("shop_id_s", "")
+                p     = prev_am_shops.loc[sid] if (len(prev_am_shops) and sid in prev_am_shops.index) else None
 
-            sc_cols = [c for c in ["Health","SKU","Price","View","CVR"] if c in tbl.columns]
-            styled  = tbl.style.map(_css, subset=sc_cols).map(_cprio, subset=["Priority"])
-            styled  = styled.set_properties(**{"font-size":"11px"})
+                c_gmv  = int(sh.get("gmv", 0))
+                c_ord  = int(sh.get("total_orders", 0))
+                c_view = float(sh.get("avg_view", 0))
+                c_cr   = float(sh.get("avg_cr", 0))
+
+                p_gmv  = int(p.get("gmv", 0))         if p is not None else None
+                p_ord  = int(p.get("total_orders", 0)) if p is not None else None
+                p_view = float(p.get("avg_view", 0))   if p is not None else None
+                p_cr   = float(p.get("avg_cr", 0))     if p is not None else None
+
+                def chg(c, pv):
+                    if pv is None or pv == 0: return "–"
+                    d = (c - pv) / pv * 100
+                    return f"{'▲' if d>=0 else '▼'}{abs(d):.0f}%"
+
+                row = {
+                    "Shop": sh.get("organization_name",""),
+                    "Category": sh.get("category",""),
+                    f"GMV {ov_month_sel}":      fmt_gmv(c_gmv),
+                    f"GMV {prev_ov_lbl or '–'}": fmt_gmv(p_gmv) if p_gmv is not None else "–",
+                    "GMV Δ":   chg(c_gmv, p_gmv),
+                    f"Orders {ov_month_sel}":    f"{c_ord:,}",
+                    f"Orders {prev_ov_lbl or '–'}": f"{p_ord:,}" if p_ord is not None else "–",
+                    "Orders Δ": chg(c_ord, p_ord),
+                    f"View {ov_month_sel}":      f"{c_view:,.0f}",
+                    f"View {prev_ov_lbl or '–'}": f"{p_view:,.0f}" if p_view is not None else "–",
+                    "View Δ":   chg(c_view, p_view),
+                    f"CVR {ov_month_sel}":       f"{c_cr:.2f}%",
+                    f"CVR {prev_ov_lbl or '–'}":  f"{p_cr:.2f}%" if p_cr is not None else "–",
+                    "CVR Δ":    chg(c_cr, p_cr),
+                }
+                rows_cmp.append(row)
+
+            tbl = pd.DataFrame(rows_cmp)
+
+            def _cdelta(v):
+                if not isinstance(v, str) or v == "–": return "color:#aaa"
+                return "color:#16A34A;font-weight:600" if "▲" in v else "color:#DC2626;font-weight:600"
+
+            delta_cols = ["GMV Δ","Orders Δ","View Δ","CVR Δ"]
+            styled = tbl.style.map(_cdelta, subset=[c for c in delta_cols if c in tbl.columns])
+            styled = styled.set_properties(**{"font-size":"11px"})
 
             st.dataframe(styled, use_container_width=True,
                          height=min(520, 44 + len(tbl)*35))
             st.download_button(
                 f"⬇ {r['kam']}_shops.csv",
-                to_csv(am_shops_drill[avail]),
+                to_csv(tbl),
                 f"{r['kam'].replace(' ','_')}_{ov_mk}.csv",
                 "text/csv", key=f"dl_{kam_key}"
             )
