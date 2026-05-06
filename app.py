@@ -856,25 +856,16 @@ with tab_ov:
     am_full    = pd.DataFrame(ov_mdata["am"])
     shops_full = pd.DataFrame(ov_mdata["shops"])
 
-    st.markdown('<div class="section-title">AM Scorecard — คลิกเพื่อดูรายคน</div>', unsafe_allow_html=True)
-    ov_am_sel = st.session_state.get("ov_am_sel", "all")
+    st.markdown('<div class="section-title">AM Scorecard</div>', unsafe_allow_html=True)
 
-    # AM selector pills
-    pill_cols = st.columns(min(len(am_full)+1, 7))
-    if pill_cols[0].button("ทั้งหมด", key="ov_all",
-                           type="primary" if ov_am_sel=="all" else "secondary",
-                           use_container_width=True):
-        st.session_state["ov_am_sel"] = "all"; st.rerun()
-    for i, (_, r) in enumerate(am_full.sort_values("avg_health").iterrows()):
-        if i+1 < len(pill_cols):
-            if pill_cols[i+1].button(r["kam"], key=f"ov_{r['kam']}",
-                                     type="primary" if ov_am_sel==r["kam"] else "secondary",
-                                     use_container_width=True):
-                st.session_state["ov_am_sel"] = r["kam"]; st.rerun()
+    # AM dropdown filter
+    am_options = ["ทั้งหมด"] + sorted(am_full["kam"].unique().tolist())
+    ov_am_sel  = st.selectbox("เลือก AM", am_options, key="ov_am_sel_dd",
+                               label_visibility="collapsed")
 
     # Filter data by selected AM
-    am_src_ov = am_full if ov_am_sel=="all" else am_full[am_full["kam"]==ov_am_sel]
-    shops_src  = shops_full if ov_am_sel=="all" else shops_full[shops_full["kam"]==ov_am_sel]
+    am_src_ov = am_full if ov_am_sel=="ทั้งหมด" else am_full[am_full["kam"]==ov_am_sel]
+    shops_src  = shops_full if ov_am_sel=="ทั้งหมด" else shops_full[shops_full["kam"]==ov_am_sel]
 
     # ── Load prev month AM data for comparison ────────────────────────────────
     prev_am_map = {}   # kam → {gmv, total_orders, avg_view}
@@ -975,22 +966,115 @@ with tab_ov:
         )
         st.markdown(card_html, unsafe_allow_html=True)
 
-    # Pillar scores
-    st.markdown('<div class="section-title">5 Pillar Scores</div>', unsafe_allow_html=True)
-    pcols = st.columns(5)
-    pillar_am_keys = ["avg_sku","avg_price","avg_view","avg_cvr"]
-    for col,(pname,pk) in zip(pcols, zip(PILLAR_NAMES, pillar_am_keys)):
-        avg   = am_src_ov[pk].mean() if len(am_src_ov) else 0
+    # ── Pillar scores — clickable drill-down ────────────────────────────────
+    st.markdown('<div class="section-title">4 Pillar Scores — คลิกเพื่อดูร้านที่ต้องแก้</div>', unsafe_allow_html=True)
+
+    PILLAR_META = [
+        {"name": "SKU Quality", "score_col": "sku_score",   "am_key": "avg_sku",
+         "desc": "ร้านที่มี SKU น้อยกว่า category",
+         "detail_cols": ["organization_name","kam","category","sku_count","sku_score"],
+         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","sku_count":"SKUs","sku_score":"Score"},
+         "sort_asc": True, "threshold": 40},
+        {"name": "Price",       "score_col": "price_score", "am_key": "avg_price",
+         "desc": "ร้านที่ราคาสูงกว่า lowest 12m",
+         "detail_cols": ["organization_name","kam","category","selling_price_mean","lowest_price_12m","price_above","price_score"],
+         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","selling_price_mean":"Selling","lowest_price_12m":"Lowest 12m","price_above":"Above%","price_score":"Score"},
+         "sort_asc": True, "threshold": 50},
+        {"name": "View MoM",   "score_col": "view_score",  "am_key": "avg_view",
+         "desc": "ร้านที่ view ลดลงจากเดือนก่อน",
+         "detail_cols": ["organization_name","kam","category","avg_view","view_mom_pct","view_score"],
+         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_view":"Views/mo","view_mom_pct":"MoM%","view_score":"Score"},
+         "sort_asc": True, "threshold": 40},
+        {"name": "CVR MoM",    "score_col": "cvr_score",   "am_key": "avg_cvr",
+         "desc": "ร้านที่ conversion rate ลดลง",
+         "detail_cols": ["organization_name","kam","category","avg_cr","cvr_mom_pct","cvr_score"],
+         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_cr":"CR%","cvr_mom_pct":"MoM%","cvr_score":"Score"},
+         "sort_asc": True, "threshold": 40},
+    ]
+
+    sel_pillar = st.session_state.get("sel_pillar_ov", None)
+    pcols = st.columns(4)
+
+    for col, pm in zip(pcols, PILLAR_META):
+        avg   = am_src_ov[pm["am_key"]].mean() if len(am_src_ov) else 0
         label = "ต้องแก้" if avg<40 else "ปรับปรุง" if avg<60 else "ดี"
         bg,tc = ("#FCEBEB","#A32D2D") if avg<40 else ("#FAEEDA","#854F0B") if avg<60 else ("#EAF3DE","#3B6D11")
-        col.markdown(f"""<div style="background:#f8f7f4;border-radius:10px;padding:.75rem 1rem;border:0.5px solid rgba(0,0,0,0.07)">
-          <div style="font-size:9px;color:#999;font-weight:500;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{pname}</div>
+        is_sel = sel_pillar == pm["name"]
+        border = "2px solid #1a5fa8" if is_sel else "1px solid #e8e5e0"
+
+        col.markdown(f"""<div style="background:#f8f7f4;border-radius:10px;padding:.75rem 1rem;border:{border}">
+          <div style="font-size:9px;color:#999;font-weight:500;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{pm['name']}</div>
           <div style="font-size:20px;font-weight:500;color:{sc(avg)}">{avg:.0f}</div>
           <div style="height:4px;background:#e5e3de;border-radius:2px;margin:4px 0">
             <div style="width:{avg:.0f}%;height:100%;background:{sc(avg)};border-radius:2px"></div>
           </div>
           <span style="font-size:9px;background:{bg};color:{tc};padding:1px 6px;border-radius:8px">{label}</span>
         </div>""", unsafe_allow_html=True)
+
+        btn_label = "✕ ปิด" if is_sel else f"ดูร้าน ↓"
+        if col.button(btn_label, key=f"pil_{pm['name']}", use_container_width=True,
+                      type="primary" if is_sel else "secondary"):
+            st.session_state["sel_pillar_ov"] = None if is_sel else pm["name"]
+            st.rerun()
+
+    # ── Pillar drill-down table ───────────────────────────────────────────────
+    if sel_pillar:
+        pm = next(p for p in PILLAR_META if p["name"] == sel_pillar)
+        score_col = pm["score_col"]
+        threshold = pm["threshold"]
+
+        drill_src = ov_shops.copy() if ov_am_sel == "ทั้งหมด" else ov_shops[ov_shops["kam"] == ov_am_sel].copy()
+        drill = drill_src[drill_src[score_col] < threshold].copy() if score_col in drill_src.columns else drill_src.copy()
+        drill = drill.sort_values(score_col, ascending=True)
+
+        n_total = len(drill_src)
+        n_low   = len(drill)
+        st.markdown(
+            f'<div class="section-title">{pm["name"]} — {n_low} ร้านที่ต้องปรับ '
+            f'({n_low/max(n_total,1)*100:.0f}% ของทั้งหมด) · {pm["desc"]}</div>',
+            unsafe_allow_html=True
+        )
+
+        if len(drill) == 0:
+            st.success(f"✓ ไม่มีร้านที่ต้องแก้ใน {sel_pillar} ครับ")
+        else:
+            available_cols = [c for c in pm["detail_cols"] if c in drill.columns]
+            tbl_drill = drill[available_cols].rename(columns=pm["detail_labels"]).copy()
+
+            # Format numbers
+            for c in tbl_drill.columns:
+                if c in ["Score"]:
+                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x)}")
+                elif c in ["Selling","Lowest 12m"]:
+                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"฿{x:,.0f}")
+                elif c in ["Above%","MoM%"]:
+                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:+.0f}%")
+                elif c == "CR%":
+                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:.2f}%")
+
+            def css_score(v):
+                try: return f"color:{sc(float(v))};font-weight:500"
+                except: return ""
+            def css_pct(v):
+                if not isinstance(v,str): return ""
+                return "color:#d94040;font-weight:500" if v.startswith("-") else "color:#3a7d2c;font-weight:500"
+
+            styled_drill = tbl_drill.style.map(css_score, subset=["Score"])
+            if "MoM%" in tbl_drill.columns:
+                styled_drill = styled_drill.map(css_pct, subset=["MoM%"])
+            if "Above%" in tbl_drill.columns:
+                styled_drill = styled_drill.map(css_pct, subset=["Above%"])
+            styled_drill = styled_drill.set_properties(**{"font-size":"12px"})
+
+            st.dataframe(styled_drill, use_container_width=True,
+                         height=min(400, 40 + len(tbl_drill)*36))
+            st.caption(f"ดาวน์โหลด")
+            st.download_button(
+                f"⬇ {sel_pillar}_shops.csv",
+                to_csv(drill[available_cols]),
+                f"{sel_pillar.lower().replace(' ','_')}_{ov_mk}.csv",
+                "text/csv"
+            )
 
 
 # ══ TAB 1: GMV MoM ════════════════════════════════════════════════════════════
@@ -1051,17 +1135,63 @@ with tab_gmv:
                 ts = trend_shop.copy()
                 if gmv_am_filt != "ทั้งหมด": ts = ts[ts["kam"]==gmv_am_filt]
                 if gmv_shop_filt: ts = ts[ts["organization_name"].isin(gmv_shop_filt)]
-                top20 = ts.groupby("organization_name")["gmv"].sum().sort_values(ascending=False).index
-                ts = ts[ts["organization_name"].isin(top20)]
-                # Swap axes: rows=shops, columns=months (฿K)
-                tp = ts.pivot(index="organization_name", columns="month", values="gmv").fillna(0) / 1e3
-                # Add total column
-                tp["Total"] = tp.sum(axis=1)
-                tp = tp.sort_values("Total", ascending=False).drop(columns="Total")
-                # Rename month columns to labels
-                tp.columns = [idx_now.get(c,{}).get("label",c) if c in idx_now else c for c in tp.columns]
-                tp.index.name = "Shop"
-                st.dataframe(tp.round(0), use_container_width=True, height=320)
+                top_all = ts.groupby("organization_name")["gmv"].sum().sort_values(ascending=False).index
+                ts = ts[ts["organization_name"].isin(top_all)]
+
+                # Pivot: rows=shops, columns=months (฿K)
+                tp_raw = ts.pivot(index="organization_name", columns="month", values="gmv").fillna(0)
+                all_mks = sorted(tp_raw.columns)
+                tp_raw = tp_raw[all_mks].sort_values(all_mks[-1] if all_mks else all_mks[0], ascending=False)
+
+                # Build display DataFrame with RR and %chg columns
+                display_rows = []
+                for shop, row in tp_raw.iterrows():
+                    r = {"Shop": shop}
+                    for i, mk in enumerate(all_mks):
+                        col_lbl = idx_now.get(mk,{}).get("label", mk)
+                        actual  = row[mk]
+                        # Run rate for incomplete month
+                        s_info  = idx_now.get(mk,{}).get("stats",{})
+                        cov     = s_info.get("coverage_pct",100) / 100
+                        is_inc  = not s_info.get("is_complete", True)
+                        rr_val  = actual / cov if is_inc and cov > 0 else actual
+                        # MoM vs previous month (use RR for both sides)
+                        if i > 0:
+                            prev_mk   = all_mks[i-1]
+                            prev_info = idx_now.get(prev_mk,{}).get("stats",{})
+                            prev_cov  = prev_info.get("coverage_pct",100)/100
+                            prev_inc  = not prev_info.get("is_complete",True)
+                            prev_rr   = row[prev_mk] / prev_cov if prev_inc and prev_cov > 0 else row[prev_mk]
+                            mom_pct   = (rr_val - prev_rr) / prev_rr * 100 if prev_rr > 0 else 0
+                            mom_str   = f"{mom_pct:+.0f}%"
+                        else:
+                            mom_str = "–"
+
+                        rr_str  = f" (RR {rr_val/1e3:.0f}K)" if is_inc else ""
+                        r[col_lbl] = f"{actual/1e3:.0f}K{rr_str}"
+                        r[f"{col_lbl} Δ"] = mom_str
+                    display_rows.append(r)
+
+                disp_df = pd.DataFrame(display_rows).set_index("Shop")
+
+                # Interleave: Jan, Jan Δ, Feb, Feb Δ, ...
+                ordered_cols = []
+                for mk in all_mks:
+                    lbl = idx_now.get(mk,{}).get("label",mk)
+                    ordered_cols += [lbl, f"{lbl} Δ"]
+                ordered_cols = [c for c in ordered_cols if c in disp_df.columns]
+                disp_df = disp_df[ordered_cols]
+
+                def css_delta(v):
+                    if not isinstance(v, str) or v == "–": return "color:#aaa"
+                    try:
+                        f = float(v.replace("%","").replace("+",""))
+                        return "color:#3a7d2c;font-weight:500" if f > 0 else "color:#d94040;font-weight:500" if f < 0 else "color:#aaa"
+                    except: return ""
+
+                delta_cols = [c for c in ordered_cols if c.endswith(" Δ")]
+                styled_tp  = disp_df.style.map(css_delta, subset=delta_cols).set_properties(**{"font-size":"11px"})
+                st.dataframe(styled_tp, use_container_width=True, height=420)
 
         with col4:
             st.markdown('<div class="section-title">Top 20 Services — GMV Total (฿K)</div>', unsafe_allow_html=True)
