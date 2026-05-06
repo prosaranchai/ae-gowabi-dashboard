@@ -2242,7 +2242,7 @@ with tab_action:
     action_shops = action_shops[action_shops["alert_count"]>0].sort_values("health_score")
 
     # ── Filters row ──────────────────────────────────────────────────────────
-    f_col1, f_col2, f_col3 = st.columns(3)
+    f_col1, f_col2, f_col3, f_col4 = st.columns(4)
 
     with f_col1:
         ams_with_issues = ["ทั้งหมด"] + sorted(action_shops["kam"].unique())
@@ -2255,6 +2255,17 @@ with tab_action:
                                     key="action_shop_dd", label_visibility="visible")
 
     with f_col3:
+        issue_opts = [
+            "ทั้งหมด",
+            "🔴 ราคาแพงเกิน (Price)",
+            "🔴 SKU น้อย",
+            "🟡 View ลด",
+            "🟡 CVR ลด",
+        ]
+        issue_filter = st.selectbox("Filter by Issue", issue_opts,
+                                     key="action_issue_dd", label_visibility="visible")
+
+    with f_col4:
         sort_by = st.selectbox("Sort by",
             ["Health score (ต่ำสุดก่อน)", "GMV (สูงสุดก่อน)", "GMV (ต่ำสุดก่อน)", "Alert count (มากสุดก่อน)"],
             key="action_sort", label_visibility="visible")
@@ -2264,6 +2275,15 @@ with tab_action:
         action_shops = action_shops[action_shops["kam"]==cur_filter]
     if shop_filter != "ทั้งหมด":
         action_shops = action_shops[action_shops["organization_name"]==shop_filter]
+    if issue_filter != "ทั้งหมด":
+        if "ราคา" in issue_filter:
+            action_shops = action_shops[action_shops["price_score"] < 50]
+        elif "SKU" in issue_filter:
+            action_shops = action_shops[action_shops["sku_score"] < 30]
+        elif "View" in issue_filter:
+            action_shops = action_shops[action_shops["view_score"] < 40]
+        elif "CVR" in issue_filter:
+            action_shops = action_shops[action_shops["cvr_score"] < 40]
 
     # Apply sort
     sort_map = {
