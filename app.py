@@ -39,8 +39,8 @@ html,body,[class*="css"]{font-family:'DM Sans',sans-serif}
 REAL_AMS = {"Amm","Aum","Chertam","Fah KAM","Geem","Get KAM",
             "Mameaw","Nahm","Pui","Puinoon","Seeiw","Wan"}
 EXCLUDED  = {"cancelled","refunded","expired","no_show"}
-PILLAR_COLS  = ["sku_score","price_score","op_score","view_score","cvr_score"]
-PILLAR_NAMES = ["SKU Quality","Price","Operation","View","Conversion"]
+PILLAR_COLS  = ["sku_score","price_score","view_score","cvr_score"]
+PILLAR_NAMES = ["SKU Quality","Price","View MoM","CVR MoM"]
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 # ─── Supabase ─────────────────────────────────────────────────────────────────
@@ -150,20 +150,46 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
     df["is_new"]    = df["is_first_booking"].isin([True,"TRUE","true","True",1])
     df["shop_id_s"] = df["shop_id"].astype(str).str.replace(".0","",regex=False).str.strip()
 
-    # ── View/CR file ──────────────────────────────────────────────────────
-    view_map = {}   # shop_id → {avg_view, avg_cr}
+    # ── View/CR file — keep per-month for MoM comparison ─────────────────────
+    view_map = {}        # shop_id → {avg_view, avg_cr}         (latest month)
+    view_map_by_month = {}  # "YYYY-MM" → {shop_id → {view, cr}} (all months)
     if view_bytes:
         vdf = pd.read_csv(io.BytesIO(view_bytes))
         vdf["shop_id"] = vdf["shop_id"].astype(str).str.strip()
-        vcols  = [c for c in vdf.columns if "User-View" in c and "Jan" not in c]
-        crcols = [c for c in vdf.columns if "CR%" in c and "Jan" not in c and "growth" not in c.lower()]
-        for c in vcols + crcols:
-            vdf[c] = pd.to_numeric(vdf[c], errors="coerce").fillna(0)
-        if vcols:
-            vdf["avg_view"] = vdf[vcols].replace(0,np.nan).mean(axis=1).fillna(0).round(0)
-            vdf["avg_cr"]   = (vdf[crcols].replace(0,np.nan).mean(axis=1).fillna(0)*100).round(2) if crcols else 0
-            vdf_dedup = vdf.sort_values("avg_view", ascending=False).drop_duplicates(subset="shop_id", keep="first")
-            view_map = vdf_dedup.set_index("shop_id")[["avg_view","avg_cr"]].to_dict("index")
+        vdf_dedup = vdf.drop_duplicates(subset="shop_id", keep="first")
+
+        # Detect all month columns (e.g. "2026_Mar User-View", "2026-Mar CR%")
+        import re
+        month_cols = {}  # "2026-03" → {"view": col, "cr": col}
+        for col in vdf.columns:
+            m = re.search(r'(\d{4})[_-](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', col)
+            if not m: continue
+            yr, mo_str = m.group(1), m.group(2)
+            mo_map = {"Jan":"01","Feb":"02","Mar":"03","Apr":"04","May":"05","Jun":"06",
+                      "Jul":"07","Aug":"08","Sep":"09","Oct":"10","Nov":"11","Dec":"12"}
+            mk = f"{yr}-{mo_map[mo_str]}"
+            if mk not in month_cols: month_cols[mk] = {}
+            if "View" in col:  month_cols[mk]["view"] = col
+            elif "CR%" in col and "growth" not in col.lower(): month_cols[mk]["cr"] = col
+
+        sorted_mks = sorted(month_cols.keys())
+        for mk, cols in month_cols.items():
+            if "view" not in cols: continue
+            vdf[cols["view"]] = pd.to_numeric(vdf[cols["view"]], errors="coerce").fillna(0)
+            cr_col = cols.get("cr")
+            if cr_col: vdf[cr_col] = pd.to_numeric(vdf[cr_col], errors="coerce").fillna(0)
+            view_map_by_month[mk] = vdf_dedup.set_index("shop_id").apply(
+                lambda row: {
+                    "view": float(row.get(cols["view"], 0) or 0),
+                    "cr":   float(row.get(cr_col, 0) or 0) * 100 if cr_col else 0.0
+                }, axis=1
+            ).to_dict()
+
+        # Latest available month as default
+        if sorted_mks:
+            last_mk = sorted_mks[-1]
+            view_map = {sid: {"avg_view": v["view"], "avg_cr": v["cr"]}
+                        for sid, v in view_map_by_month.get(last_mk, {}).items()}
 
     # ── Process each month ────────────────────────────────────────────────
     months_found = sorted(df["month_period"].dropna().unique())
@@ -192,6 +218,26 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         agg["opc"]         = (agg["total_orders"]/agg["unique_customers"].replace(0,np.nan)).round(2).fillna(1)
         agg["gmv"]         = agg["gmv"].round(0).astype(int)
 
+        # ── Service-level price data (for action list detail) ──────────────
+        # Find top 3 services per shop that are most overpriced vs lowest_12m
+        svc_price = mdf.groupby(["shop_id_s","service_name"]).agg(
+            svc_sell  = ("selling_price",  "mean"),
+            svc_low12 = ("lowest_price_12m","mean"),
+            svc_gmv   = ("gmv",            "sum"),
+        ).reset_index()
+        svc_price["svc_sell"]  = svc_price["svc_sell"].round(0)
+        svc_price["svc_low12"] = svc_price["svc_low12"].round(0)
+        svc_price["svc_pct"]   = ((svc_price["svc_sell"]-svc_price["svc_low12"])/svc_price["svc_low12"].replace(0,np.nan)*100).round(0).fillna(0)
+        svc_price = svc_price[svc_price["svc_pct"] > 10]  # only overpriced services
+
+        # Build map: shop_id → list of top 3 overpriced services
+        overpriced_map = {}
+        for sid, grp in svc_price.sort_values("svc_pct", ascending=False).groupby("shop_id_s"):
+            top3 = grp.head(3)[["service_name","svc_sell","svc_low12","svc_pct"]].to_dict("records")
+            overpriced_map[sid] = top3
+
+        agg["overpriced_svcs"] = agg["shop_id_s"].map(lambda x: overpriced_map.get(x, []))
+
         # Merge view data
         use_real = False
         if view_map:
@@ -204,23 +250,80 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
             agg["avg_view"] = 0.0
             agg["avg_cr"]   = 0.0
 
-        # 5 Pillar scores
+        # 4 Pillar scores (Operation removed)
         def pr(s): return s.rank(pct=True).mul(100).round(0)
         agg["sku_score"]   = agg.groupby("category")["sku_count"].transform(lambda x: x.rank(pct=True)*100).round(0)
         agg["price_score"] = (100-(agg["price_above"].clip(0,30)/30*100)).round(0).clip(0,100)
-        agg["op_score"]    = pr(agg["repeat_rate"])
-        agg["view_score"]  = pr(agg["avg_view"]) if use_real else agg.groupby("category")["total_orders"].transform(lambda x: x.rank(pct=True)*100).round(0)
-        agg["cvr_score"]   = pr(agg["avg_cr"])   if use_real else pr(agg["opc"])
+
+        # View MoM: compare each shop vs its own previous month
+        # Previous month key
+        sorted_mks_list = sorted(view_map_by_month.keys()) if view_map_by_month else []
+        prev_mk_idx = sorted_mks_list.index(mkey)-1 if mkey in sorted_mks_list and sorted_mks_list.index(mkey)>0 else -1
+        prev_view_mk = sorted_mks_list[prev_mk_idx] if prev_mk_idx >= 0 else None
+
+        if use_real and prev_view_mk:
+            prev_view_data = view_map_by_month.get(prev_view_mk, {})
+            cur_view_data  = view_map_by_month.get(mkey, {})
+            def view_mom_score(shop_id):
+                cur  = cur_view_data.get(shop_id,  {}).get("view", 0)
+                prev = prev_view_data.get(shop_id, {}).get("view", 0)
+                if prev <= 0 and cur <= 0: return 50.0
+                if prev <= 0: return 75.0   # new shop with views
+                pct = (cur - prev) / prev * 100
+                # Map: -50% → 0, 0% → 50, +50% → 100 (clipped)
+                return float(np.clip(50 + pct, 0, 100))
+            def cvr_mom_score(shop_id):
+                cur  = cur_view_data.get(shop_id,  {}).get("cr", 0)
+                prev = prev_view_data.get(shop_id, {}).get("cr", 0)
+                if prev <= 0 and cur <= 0: return 50.0
+                if prev <= 0: return 75.0
+                pct = (cur - prev) / prev * 100
+                return float(np.clip(50 + pct, 0, 100))
+            agg["view_score"] = agg["shop_id_s"].map(view_mom_score).fillna(50).round(0)
+            agg["cvr_score"]  = agg["shop_id_s"].map(cvr_mom_score).fillna(50).round(0)
+            # Store MoM % for display in action list
+            agg["view_mom_pct"] = agg["shop_id_s"].map(lambda sid: round(
+                (cur_view_data.get(sid,{}).get("view",0) - view_map_by_month.get(prev_view_mk,{}).get(sid,{}).get("view",0))
+                / max(view_map_by_month.get(prev_view_mk,{}).get(sid,{}).get("view",1),1)*100, 1))
+            agg["cvr_mom_pct"]  = agg["shop_id_s"].map(lambda sid: round(
+                (cur_view_data.get(sid,{}).get("cr",0) - view_map_by_month.get(prev_view_mk,{}).get(sid,{}).get("cr",0))
+                / max(view_map_by_month.get(prev_view_mk,{}).get(sid,{}).get("cr",0.01),0.01)*100, 1))
+        elif use_real:
+            # No prev month in view file → use percentile rank
+            agg["view_score"]   = pr(agg["avg_view"])
+            agg["cvr_score"]    = pr(agg["avg_cr"])
+            agg["view_mom_pct"] = 0.0
+            agg["cvr_mom_pct"]  = 0.0
+        else:
+            # No view file → proxy
+            agg["view_score"]   = agg.groupby("category")["total_orders"].transform(lambda x: x.rank(pct=True)*100).round(0)
+            agg["cvr_score"]    = pr(agg["opc"])
+            agg["view_mom_pct"] = 0.0
+            agg["cvr_mom_pct"]  = 0.0
+
         agg["health_score"] = agg[PILLAR_COLS].mean(axis=1).round(1)
         agg["priority"]     = pd.cut(agg["health_score"],bins=[0,40,60,100],labels=["critical","warning","healthy"]).astype(str)
 
         def mk_alerts(r):
             a=[]
-            if r["sku_score"]   <30: a.append(f"SKU น้อย ({int(r['sku_count'])} SKUs)")
-            if r["price_score"] <50: a.append(f"ราคาสูงกว่า lowest +{r['price_above']:.0f}%")
-            if r["op_score"]    <30: a.append(f"Repeat rate ต่ำ ({r['repeat_rate']:.0f}%)")
-            if r["view_score"]  <25: a.append(f"View ต่ำ ({int(r['avg_view'])} views)" if use_real else f"Volume ต่ำ ({int(r['total_orders'])} orders)")
-            if r["cvr_score"]   <30: a.append(f"CR% ต่ำ ({r['avg_cr']:.2f}%)" if use_real else f"Orders/cust ต่ำ ({r['opc']:.1f}x)")
+            if r["sku_score"]  <30: a.append(f"SKU น้อย ({int(r['sku_count'])} SKUs)")
+            if r["price_score"]<50: a.append(f"ราคาสูงกว่า lowest +{r['price_above']:.0f}%")
+            if r["view_score"] <40:
+                mom = r.get("view_mom_pct", 0)
+                if use_real and mom != 0:
+                    a.append(f"View ลด {abs(mom):.0f}% MoM ({int(r['avg_view'])} views)")
+                elif use_real:
+                    a.append(f"View ต่ำ ({int(r['avg_view'])} views)")
+                else:
+                    a.append(f"Volume ต่ำ ({int(r['total_orders'])} orders)")
+            if r["cvr_score"]  <40:
+                mom = r.get("cvr_mom_pct", 0)
+                if use_real and mom != 0:
+                    a.append(f"CR% ลด {abs(mom):.0f}% MoM ({r['avg_cr']:.2f}%)")
+                elif use_real:
+                    a.append(f"CR% ต่ำ ({r['avg_cr']:.2f}%)")
+                else:
+                    a.append(f"Orders/cust ต่ำ ({r['opc']:.1f}x)")
             return " | ".join(a)
 
         agg["alerts"]      = agg.apply(mk_alerts, axis=1)
@@ -233,8 +336,8 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
             warning_shops=("priority",lambda x:(x=="warning").sum()),
             avg_health=("health_score","mean"),
             avg_sku=("sku_score","mean"),   avg_price=("price_score","mean"),
-            avg_op=("op_score","mean"),     avg_view=("view_score","mean"),
-            avg_cvr=("cvr_score","mean"),   total_alerts=("alert_count","sum"),
+            avg_view=("view_score","mean"),
+            avg_cvr=("cvr_score","mean"),   avg_view_mom=("view_mom_pct","mean"),  avg_cvr_mom=("cvr_mom_pct","mean"),  total_alerts=("alert_count","sum"),
         ).reset_index().round(1)
         am["gmv"] = am["gmv"].astype(int)
 
@@ -676,10 +779,10 @@ with tab_ov:
     ov_m_col1, ov_m_col2 = st.columns([3, 1])
     with ov_m_col1:
         ov_month_opts = [idx_now[m]["label"] for m in all_mk_ov]
-        ov_month_sel  = st.select_slider(
+        ov_month_sel  = st.selectbox(
             "เลือกเดือน",
             options=ov_month_opts,
-            value=idx_now[sel_month]["label"],
+            index=ov_month_opts.index(idx_now[sel_month]["label"]) if idx_now[sel_month]["label"] in ov_month_opts else len(ov_month_opts)-1,
             key="ov_month",
             label_visibility="collapsed"
         )
@@ -773,6 +876,43 @@ with tab_ov:
     am_src_ov = am_full if ov_am_sel=="all" else am_full[am_full["kam"]==ov_am_sel]
     shops_src  = shops_full if ov_am_sel=="all" else shops_full[shops_full["kam"]==ov_am_sel]
 
+    # ── Load prev month AM data for comparison ────────────────────────────────
+    prev_am_map = {}   # kam → {gmv, total_orders, avg_view}
+    if ov_prev:
+        prev_md = load_month_data(ov_prev)
+        if prev_md:
+            prev_am_df  = pd.DataFrame(prev_md.get("am",[]))
+            prev_sh_df  = pd.DataFrame(prev_md.get("shops",[]))
+            prev_is_rr2 = not idx_now[ov_prev]["stats"].get("is_complete", True)
+            prev_cov    = idx_now[ov_prev]["stats"].get("coverage_pct", 100) / 100
+
+            for _, pa in prev_am_df.iterrows():
+                psh = prev_sh_df[prev_sh_df["kam"]==pa["kam"]]
+                p_orders = psh["total_orders"].sum() if "total_orders" in psh.columns else 0
+                p_view   = psh["avg_view"].mean()    if "avg_view"   in psh.columns else 0
+                # Run rate adjust if prev month was incomplete
+                p_gmv_rr = pa["gmv"] / prev_cov if prev_is_rr2 and prev_cov > 0 else pa["gmv"]
+                p_ord_rr = p_orders  / prev_cov if prev_is_rr2 and prev_cov > 0 else p_orders
+                p_view_rr= p_view    / prev_cov if prev_is_rr2 and prev_cov > 0 else p_view
+                prev_am_map[pa["kam"]] = {
+                    "gmv":    p_gmv_rr,
+                    "orders": p_ord_rr,
+                    "view":   p_view_rr,
+                }
+
+    def delta_html(curr, prev_val, fmt_fn=None, suffix=""):
+        """Return colored % change HTML string."""
+        if not prev_val or prev_val == 0: return ""
+        pct = (curr - prev_val) / prev_val * 100
+        color = "#3a7d2c" if pct >= 0 else "#d94040"
+        arrow = "▲" if pct >= 0 else "▼"
+        return f'<span style="font-size:10px;color:{color};font-weight:500">{arrow}{abs(pct):.0f}%</span>'
+
+    def rr_html(rr_val, is_month_rr):
+        """Return (RR ฿xxx) label if month is incomplete."""
+        if not is_month_rr: return ""
+        return f'<div style="font-size:9px;color:#185FA5;margin-top:2px">RR {fmt_gmv(rr_val)}</div>'
+
     # ── AM Scorecard cards with 6 metrics ──────────────────────────────────
     for _, r in am_src_ov.sort_values("avg_health").iterrows():
         am_shops = shops_src[shops_src["kam"]==r["kam"]] if ov_am_sel=="all" else shops_src
@@ -782,7 +922,30 @@ with tab_ov:
         avg_cr       = am_shops["avg_cr"].mean()   if "avg_cr"   in am_shops.columns else 0
         new_cust     = am_shops["new_customers"].sum() if "new_customers" in am_shops.columns else 0
 
+        # Run rate values for this AM (pro-rate by month coverage)
+        cov = ov_stats.get("coverage_pct", 100) / 100
+        gmv_rr     = r["gmv"]        / cov if ov_is_rr and cov > 0 else r["gmv"]
+        orders_rr  = total_orders    / cov if ov_is_rr and cov > 0 else total_orders
+        view_rr    = avg_view        / cov if ov_is_rr and cov > 0 else avg_view
+
+        # Prev month values
+        prev_am = prev_am_map.get(r["kam"], {})
+        p_gmv   = prev_am.get("gmv",    0)
+        p_ord   = prev_am.get("orders", 0)
+        p_view  = prev_am.get("view",   0)
+
         health_color = sc(r["avg_health"])
+
+        # Helper: metric cell HTML
+        def mcell(label, main_val, rr_val=None, prev_val=None, color="inherit", extra=""):
+            rr_part  = f'<div style="font-size:9px;color:#185FA5;margin-top:1px">RR {fmt_gmv(rr_val)}</div>' if rr_val and ov_is_rr else ""
+            d_html   = delta_html(rr_val or main_val, prev_val) if prev_val else ""
+            return f"""<div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
+              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{label}</div>
+              <div style="font-size:14px;font-weight:600;color:{color}">{main_val}</div>
+              {rr_part}{d_html}{extra}
+            </div>"""
+
         st.markdown(f"""
         <div style="background:#fff;border:1px solid #e8e5e0;border-radius:12px;padding:12px 16px;margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
@@ -795,37 +958,19 @@ with tab_ov:
             </div>
           </div>
           <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
-            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">GMV</div>
-              <div style="font-size:14px;font-weight:600">{fmt_gmv(r['gmv'])}</div>
-            </div>
-            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Orders</div>
-              <div style="font-size:14px;font-weight:600">{int(total_orders):,}</div>
-            </div>
-            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Basket Size</div>
-              <div style="font-size:14px;font-weight:600">฿{basket_size:,.0f}</div>
-            </div>
-            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">New User</div>
-              <div style="font-size:14px;font-weight:600">{int(new_cust):,}</div>
-            </div>
-            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Shop View</div>
-              <div style="font-size:14px;font-weight:600">{avg_view:,.0f}</div>
-            </div>
-            <div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">CVR</div>
-              <div style="font-size:14px;font-weight:600;color:{sc(r['avg_cvr'])}">{avg_cr:.2f}%</div>
-            </div>
+            {mcell("GMV",       fmt_gmv(r['gmv']),   rr_val=gmv_rr,    prev_val=p_gmv  if p_gmv  else None)}
+            {mcell("Orders",    f"{int(total_orders):,}", rr_val=orders_rr, prev_val=p_ord  if p_ord  else None)}
+            {mcell("Basket Size", f"฿{basket_size:,.0f}")}
+            {mcell("New User",  f"{int(new_cust):,}")}
+            {mcell("Shop View", f"{avg_view:,.0f}",   rr_val=view_rr,   prev_val=p_view if p_view else None)}
+            {mcell("CVR",       f"{avg_cr:.2f}%",     color=sc(r['avg_cvr']))}
           </div>
         </div>""", unsafe_allow_html=True)
 
     # Pillar scores
     st.markdown('<div class="section-title">5 Pillar Scores</div>', unsafe_allow_html=True)
     pcols = st.columns(5)
-    pillar_am_keys = ["avg_sku","avg_price","avg_op","avg_view","avg_cvr"]
+    pillar_am_keys = ["avg_sku","avg_price","avg_view","avg_cvr"]
     for col,(pname,pk) in zip(pcols, zip(PILLAR_NAMES, pillar_am_keys)):
         avg   = am_src_ov[pk].mean() if len(am_src_ov) else 0
         label = "ต้องแก้" if avg<40 else "ปรับปรุง" if avg<60 else "ดี"
@@ -1049,17 +1194,47 @@ with tab_health:
 
     dcols = {"organization_name":"Shop","kam":"AM","category":"Category",
              "total_orders":"Orders","gmv":"GMV","health_score":"Health",
-             "sku_score":"SKU","price_score":"Price","op_score":"Op",
-             "view_score":"View","cvr_score":"CVR","priority":"Priority","alerts":"Alerts"}
+             "sku_score":"SKU","price_score":"Price",
+             "view_score":"View MoM","cvr_score":"CVR MoM","priority":"Priority","alerts":"Alerts"}
 
     tbl = shops_df[list(dcols.keys())].rename(columns=dcols).copy()
-    tbl["GMV"] = tbl["GMV"].apply(fmt_gmv)
 
-    score_cols = ["Health","SKU","Price","Op","View","CVR"]
-    styled = (tbl.style
-        .map(css,     subset=score_cols)
-        .map(cprio,   subset=["Priority"])
-        .set_properties(**{"font-size":"12px"}))
+    # Format numbers — clean & readable
+    tbl["GMV"]      = tbl["GMV"].apply(fmt_gmv)
+    tbl["Health"]   = tbl["Health"].apply(lambda x: f"{x:.1f}")
+    tbl["SKU"]      = tbl["SKU"].apply(lambda x: f"{int(x)}")
+    tbl["Price"]    = tbl["Price"].apply(lambda x: f"{int(x)}")
+    tbl["View MoM"] = tbl["View MoM"].apply(lambda x: f"{int(x)}")
+    tbl["CVR MoM"]  = tbl["CVR MoM"].apply(lambda x: f"{int(x)}")
+
+    # Add MoM % columns if available
+    if "view_mom_pct" in shops_df.columns:
+        tbl["View Δ"] = shops_df["view_mom_pct"].apply(
+            lambda x: f"{'▲' if x>0 else '▼' if x<0 else '–'}{abs(x):.0f}%" if x != 0 else "–")
+    if "cvr_mom_pct" in shops_df.columns:
+        tbl["CVR Δ"] = shops_df["cvr_mom_pct"].apply(
+            lambda x: f"{'▲' if x>0 else '▼' if x<0 else '–'}{abs(x):.0f}%" if x != 0 else "–")
+    if "avg_cr" in shops_df.columns:
+        tbl["CR%"] = shops_df["avg_cr"].apply(lambda x: f"{x:.2f}%")
+
+    score_cols  = ["Health","SKU","Price","View MoM","CVR MoM"]
+
+    def css_str(v):
+        """Color score columns — values are now strings like '18.2'."""
+        try: return f"color:{sc(float(v))};font-weight:500"
+        except: return ""
+
+    def cdelta(v):
+        """Color delta columns."""
+        if not isinstance(v, str): return ""
+        return "color:#3a7d2c;font-weight:500" if "▲" in v else "color:#d94040;font-weight:500" if "▼" in v else "color:#aaa"
+
+    styled = tbl.style.map(css_str, subset=score_cols).map(cprio, subset=["Priority"])
+    if "View Δ" in tbl.columns:
+        styled = styled.map(cdelta, subset=["View Δ"])
+    if "CVR Δ" in tbl.columns:
+        styled = styled.map(cdelta, subset=["CVR Δ"])
+    styled = styled.set_properties(**{"font-size":"12px"})
 
     st.dataframe(styled, use_container_width=True, height=520)
 
@@ -1210,46 +1385,46 @@ with tab_action:
                 f"(ขาดอีก ~{gap} SKUs) → เพิ่ม service หรือ package ใหม่"))
 
         if row["price_score"] < 50:
-            selling = row.get("selling_price_mean", 0)
-            lowest  = row.get("lowest_price_12m",  0)
+            selling   = row.get("selling_price_mean", 0)
+            lowest    = row.get("lowest_price_12m",  0)
             baht_diff = selling - lowest if selling and lowest else 0
-            acts.append(("🔴 ปรับราคา",
-                f"ราคาปัจจุบัน ฿{selling:,.0f} — สูงกว่า lowest 12m ฿{lowest:,.0f} "
-                f"อยู่ +{row['price_above']:.0f}% (฿{baht_diff:,.0f}) → ลดราคาหรือทำ promo"))
-
-        if row["op_score"] < 30:
-            prev_rr = None
-            if prev_mk and prev_mk in prev_shop_map:
-                prev_shop = prev_shop_map.get(shop_id, {})
-                # We don't store repeat_rate in prev_shop_map but can estimate
-            rr = row["repeat_rate"]
-            acts.append(("🟡 รักษาลูกค้า",
-                f"Repeat rate {rr:.0f}% — ลูกค้า {100-rr:.0f}% มาแค่ครั้งเดียว "
-                f"→ ส่ง follow-up / voucher กลับมา"))
-
-        if row["view_score"] < 25:
-            cur_view  = row.get("avg_view", 0)
-            prev_view = prev.get("avg_view", 0)
-            if prev_view > 0 and cur_view > 0:
-                vdiff = cur_view - prev_view
-                vpct  = vdiff / prev_view * 100
-                view_mom = f" ({'+' if vpct>=0 else ''}{vpct:.0f}% vs {prev_label})" if prev_label else ""
+            # Build per-service detail
+            overpriced_svcs = row.get("overpriced_svcs", [])
+            if overpriced_svcs:
+                svc_lines = []
+                for s in overpriced_svcs[:3]:
+                    nm   = s["service_name"][:40] + ("…" if len(s["service_name"])>40 else "")
+                    diff = s["svc_sell"] - s["svc_low12"]
+                    svc_lines.append(f"• {nm}: ฿{s['svc_sell']:,.0f} vs lowest ฿{s['svc_low12']:,.0f} (+{s['svc_pct']:.0f}%, ฿{diff:,.0f})")
+                svc_detail = "\n" + "\n".join(svc_lines)
             else:
-                view_mom = ""
-            acts.append(("🟡 เพิ่ม View",
-                f"Page view {cur_view:,.0f}/เดือน{view_mom} — "
+                svc_detail = f" — avg ฿{selling:,.0f} vs lowest ฿{lowest:,.0f} (+{row['price_above']:.0f}%, ฿{baht_diff:,.0f})"
+            acts.append(("🔴 ปรับราคา", f"Services ที่แพงกว่า lowest 12m:{svc_detail}"))
+
+        # Operation pillar removed
+
+        if row["view_score"] < 40:
+            cur_view  = row.get("avg_view", 0)
+            view_mom_pct = row.get("view_mom_pct", 0)
+            if view_mom_pct != 0:
+                mom_str = f" ({'+' if view_mom_pct>=0 else ''}{view_mom_pct:.0f}% vs เดือนก่อน)"
+                emoji   = "📉" if view_mom_pct < 0 else "📈"
+            else:
+                mom_str = ""; emoji = "📉"
+            acts.append((f"🟡 เพิ่ม View",
+                f"{emoji} Page view {cur_view:,.0f}/เดือน{mom_str} — "
                 f"เพิ่มรูปภาพ, ปรับ description, ขอ featured listing หรือ banner"))
 
-        if row["cvr_score"] < 30:
+        if row["cvr_score"] < 40:
             cr = row.get("avg_cr", 0)
-            prev_cr = prev.get("avg_cr", 0)
-            if prev_cr > 0 and cr > 0:
-                cr_diff = cr - prev_cr
-                cr_str  = f" ({'+' if cr_diff>=0 else ''}{cr_diff:.2f}% vs {prev_label})"
+            cvr_mom_pct = row.get("cvr_mom_pct", 0)
+            if cvr_mom_pct != 0:
+                cr_str = f" ({'+' if cvr_mom_pct>=0 else ''}{cvr_mom_pct:.0f}% vs เดือนก่อน)"
+                emoji  = "📉" if cvr_mom_pct < 0 else "📈"
             else:
-                cr_str = ""
-            acts.append(("🟡 ปรับ CVR",
-                f"CR% {cr:.2f}%{cr_str} — "
+                cr_str = ""; emoji = "📉"
+            acts.append((f"🟡 ปรับ CVR",
+                f"{emoji} CR% {cr:.2f}%{cr_str} — "
                 f"ตรวจ: รูปภาพ, description, ราคา, reviews และ response time"))
 
         # ── Render card ────────────────────────────────────────────────────
@@ -1272,13 +1447,19 @@ with tab_action:
                 </div>
               </div>
               <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">
-                {''.join([f'<div style="text-align:center;padding:2px 8px;border-radius:5px;background:#f5f3ef"><div style="font-size:8px;color:#aaa">{n}</div><div style="font-size:12px;font-weight:600;color:{sc(row[k])}">{int(row[k])}</div></div>' for k,n in zip(["sku_score","price_score","op_score","view_score","cvr_score"],["SKU","Price","Op","View","CVR"])])}
+                {''.join([f'<div style="text-align:center;padding:2px 8px;border-radius:5px;background:#f5f3ef"><div style="font-size:8px;color:#aaa">{n}</div><div style="font-size:12px;font-weight:600;color:{sc(row[k])}">{int(row[k])}</div></div>' for k,n in zip(["sku_score","price_score","view_score","cvr_score"],["SKU","Price","View","CVR"])])}
               </div>
             </div>
             """, unsafe_allow_html=True)
             if acts:
                 for icon_label, detail in acts:
-                    st.markdown(f"→ **{icon_label}** — {detail}")
+                    lines = detail.split("\n")
+                    if len(lines) == 1:
+                        st.markdown(f"→ **{icon_label}** — {detail}")
+                    else:
+                        st.markdown(f"→ **{icon_label}** — {lines[0]}")
+                        for line in lines[1:]:
+                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{line}")
             st.markdown("---")
 
     if len(action_shops) > 80:
