@@ -2825,11 +2825,12 @@ with tab_portfolio:
     </div>
     <div style="text-align:right">
       <div style="font-size:11px;color:#aaa;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Portfolio GMV</div>
-      <div style="font-size:22px;font-weight:700">{fmt_gmv(cur_am["gmv"].sum())}</div>
-      <div style="font-size:11px">{arrow_pct(
-          (cur_am["gmv"].sum() - prev_am["gmv"].sum()) / prev_am["gmv"].sum() * 100
-          if prev_am["gmv"].sum() > 0 else None
-      )} vs {pf_prev_lbl}</div>
+      {(lambda cur_g, prev_g, cov, is_inc:
+          f'<div style="font-size:22px;font-weight:700">{fmt_gmv(cur_g)}</div>' +
+          (f'<div style="font-size:10px;color:#2563EB;font-weight:500">RR {fmt_gmv(cur_g/cov)}</div>' if is_inc else "") +
+          f'<div style="font-size:11px">{arrow_pct((cur_g/cov - prev_g)/(prev_g)*100 if is_inc and prev_g>0 else (cur_g-prev_g)/prev_g*100 if prev_g>0 else None)} vs {pf_prev_lbl}</div>'
+      )(cur_am["gmv"].sum(), prev_am["gmv"].sum(),
+        pf_cov, pf_is_rr)}
     </div>
   </div>
 </div>""", unsafe_allow_html=True)
