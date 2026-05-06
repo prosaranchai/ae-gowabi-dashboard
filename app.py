@@ -1353,8 +1353,8 @@ with tab_ov:
             f'<div style="font-size:24px;font-weight:600;letter-spacing:-.03em;color:{health_color}">{r["avg_health"]:.1f}</div>'
             f'<div style="font-size:11px;color:#aaa">{int(r["shops"])} shops</div>'
             '<div style="margin-left:auto;font-size:11px">'
-            f'<span style="color:#E24B4A">● {int(r["critical_shops"])} critical</span>&nbsp;&nbsp;'
-            f'<span style="color:#EF9F27">● {int(r["warning_shops"])} warning</span>'
+            f'<span style="color:#E24B4A">🔴 {int(r["critical_shops"])} critical</span>&nbsp;&nbsp;'
+            f'<span style="color:#EF9F27">🟡 {int(r["warning_shops"])} warning</span>'
             '</div></div>'
             '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">'
             + cells_html +
@@ -2257,10 +2257,10 @@ with tab_action:
     with f_col3:
         issue_opts = [
             "ทั้งหมด",
-            "🔴 Price",
-            "🔴 SKU",
-            "🟡 View",
-            "🟡 CVR",
+            "💰 Price",
+            "📦 SKU",
+            "👁 View",
+            "📉 CVR",
         ]
         issue_filter = st.selectbox("Filter by Issue", issue_opts,
                                      key="action_issue_dd", label_visibility="visible")
@@ -2278,11 +2278,11 @@ with tab_action:
     if issue_filter != "ทั้งหมด":
         if "Price" in issue_filter:
             action_shops = action_shops[action_shops["price_score"] < 50]
-        elif issue_filter == "🔴 SKU":
+        elif issue_filter == "📦 SKU":
             action_shops = action_shops[action_shops["sku_score"] < 30]
-        elif issue_filter == "🟡 View":
+        elif issue_filter == "👁 View":
             action_shops = action_shops[action_shops["view_score"] < 40]
-        elif issue_filter == "🟡 CVR":
+        elif issue_filter == "📉 CVR":
             action_shops = action_shops[action_shops["cvr_score"] < 40]
 
     # Apply sort
@@ -2307,9 +2307,9 @@ with tab_action:
                 st.markdown(f"""
                 <div style="background:#fff;border:1px solid #ebebeb;border-radius:8px;padding:10px 16px;margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
                   <div style="font-size:10px;font-weight:600;color:#bbb;text-transform:uppercase;letter-spacing:.07em">Task Summary — {my_kam_id}</div>
-                  <span style="font-size:11px;background:#FEF2F2;color:#DC2626;padding:3px 10px;border-radius:4px;font-weight:600">🔴 Pending {len(pending_shops)}</span>
-                  <span style="font-size:11px;background:#FFFBEB;color:#D97706;padding:3px 10px;border-radius:4px;font-weight:600">🟡 In Progress {len(inprog_shops)}</span>
-                  <span style="font-size:11px;background:#EFF6FF;color:#2563EB;padding:3px 10px;border-radius:4px;font-weight:600">⬆️ Escalate {len(escalate_shops)}</span>
+                  <span style="font-size:11px;background:#FEF2F2;color:#DC2626;padding:3px 10px;border-radius:4px;font-weight:600">⏳ Pending {len(pending_shops)}</span>
+                  <span style="font-size:11px;background:#FFFBEB;color:#D97706;padding:3px 10px;border-radius:4px;font-weight:600">⚙️ In Progress {len(inprog_shops)}</span>
+                  <span style="font-size:11px;background:#EFF6FF;color:#2563EB;padding:3px 10px;border-radius:4px;font-weight:600">🚨 Escalate {len(escalate_shops)}</span>
                   <span style="font-size:11px;background:#F0FDF4;color:#16A34A;padding:3px 10px;border-radius:4px;font-weight:600">✅ Done {len(done_shops)}</span>
                 </div>""", unsafe_allow_html=True)
 
@@ -2371,7 +2371,7 @@ with tab_action:
         if row["sku_score"] < 30:
             cat_avg = cat_sku_avg.get(row["category"], 0)
             gap     = max(0, round(cat_avg - row["sku_count"]))
-            acts.append(("🔴 เพิ่ม SKU",
+            acts.append(("📦 เพิ่ม SKU",
                 f"มี {int(row['sku_count'])} SKUs — avg ของ {row['category']} อยู่ที่ {cat_avg:.0f} SKUs "
                 f"(ขาดอีก ~{gap} SKUs) → เพิ่ม service หรือ package ใหม่"))
 
@@ -2390,7 +2390,7 @@ with tab_action:
                 svc_detail = "\n" + "\n".join(svc_lines)
             else:
                 svc_detail = f" — avg ฿{selling:,.0f} vs lowest ฿{lowest:,.0f} (+{row['price_above']:.0f}%, ฿{baht_diff:,.0f})"
-            acts.append(("🔴 ปรับราคา", f"Services ที่แพงกว่า lowest 12m:{svc_detail}"))
+            acts.append(("💰 ปรับราคา", f"Services ที่แพงกว่า lowest 12m:{svc_detail}"))
 
         # Operation pillar removed
 
@@ -2402,7 +2402,7 @@ with tab_action:
                 emoji   = "📉" if view_mom_pct < 0 else "📈"
             else:
                 mom_str = ""; emoji = "📉"
-            acts.append((f"🟡 เพิ่ม View",
+            acts.append((f"👁 เพิ่ม View",
                 f"{emoji} Page view {cur_view:,.0f}/เดือน{mom_str} — "
                 f"เพิ่มรูปภาพ, ปรับ description, ขอ featured listing หรือ banner"))
 
@@ -2414,7 +2414,7 @@ with tab_action:
                 emoji  = "📉" if cvr_mom_pct < 0 else "📈"
             else:
                 cr_str = ""; emoji = "📉"
-            acts.append((f"🟡 ปรับ CVR",
+            acts.append((f"📉 ปรับ CVR",
                 f"{emoji} CR% {cr:.2f}%{cr_str} — "
                 f"ตรวจ: รูปภาพ, description, ราคา, reviews และ response time"))
 
