@@ -2675,11 +2675,16 @@ with tab_portfolio:
                         g_sym = "▲" if gd >= 0 else "▼"
                         g_str = f"{g_sym}฿{abs(int(gd)):,}"
                         p_str = ""
-                        if pd_ != 0:
+                        # Show price change only if: existing service + price actually changed + non-zero
+                        is_existing = not s["is_new"] and s["p_sell"] > 0
+                        if is_existing and int(pd_) != 0:
                             p_col = "#DC2626" if pd_ > 0 else "#16A34A"
                             p_sym = "▲" if pd_ > 0 else "▼"
                             p_str = f'<span style="color:{p_col};font-size:9px;margin-left:4px">ราคา {p_sym}฿{abs(int(pd_)):,}</span>'
                         new_badge = ' <span style="font-size:8px;background:#EFF6FF;color:#2563EB;padding:1px 4px;border-radius:2px">NEW</span>' if s["is_new"] else ""
+                        # Hide row if GMV change is 0 (nothing to show)
+                        if int(gd) == 0 and not s["is_new"]:
+                            continue
                         lines.append(
                             f'<div style="display:flex;justify-content:space-between;align-items:center;'
                             f'padding:3px 0;border-bottom:1px solid #f5f5f5;font-size:10px">'
