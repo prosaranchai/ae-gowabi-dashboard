@@ -18,7 +18,7 @@ from datetime import datetime, date
 from supabase import create_client
 
 # ─── Page config ─────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Gowabi AM Dashboard", page_icon="💆",
+st.set_page_config(page_title="AE Portfolio Deepdive", page_icon="📊",
                    layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
@@ -792,8 +792,8 @@ is_admin = True  # Admin panel always visible — protected by password
 idx      = load_index_cached()
 
 with st.sidebar:
-    st.markdown("### 💆 Gowabi AM")
-    st.markdown("**Store Health Dashboard**")
+    st.markdown("### 📊 AE Portfolio")
+    st.markdown("**Deepdive**")
     st.markdown("---")
 
     # ── Admin panel ──────────────────────────────────────────────────────
@@ -970,7 +970,7 @@ idx_now = load_index_cached()
 if not idx_now:
     if True:
         # Always show upload panel — protected by password
-        st.markdown("## 💆 Gowabi AM Dashboard")
+        st.markdown("## 📊 AE Portfolio Deepdive")
         st.info("ยังไม่มีข้อมูล — upload ไฟล์แรกได้เลยครับ")
         st.markdown("---")
 
@@ -2630,8 +2630,8 @@ with tab_portfolio:
                 top10_drop   = pf_df_valid.nsmallest(10,"gmv_pct")
 
                 # ── Load service-level data for SKU breakdown ─────────────────
-                cur_svc_df  = pd.DataFrame(cur_md.get("svc_perf",  []))
-                prev_svc_df = pd.DataFrame(prev_md.get("svc_perf", []))
+                cur_svc_df  = pd.DataFrame((pf_cur  or {}).get("svc_perf", []))
+                prev_svc_df = pd.DataFrame((pf_prev or {}).get("svc_perf", []))
 
                 def get_sku_breakdown(shop_id, n=5):
                     """Top N services by |GMV change| for a shop."""
