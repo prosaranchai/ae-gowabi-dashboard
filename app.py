@@ -1,5 +1,5 @@
 """
-Gowabi AM Store Health Dashboard  — v4 Full Production
+AE Deepdive Dashboard — v4 Full Production
 ========================================================
 Features:
   - Upload raw CSV/xlsx → auto-detect months from service_created_at
@@ -1116,7 +1116,7 @@ shops_df = shops_df.sort_values("health_score")
 # ─── Header ───────────────────────────────────────────────────────────────────
 sel_info = idx_now[sel_month]
 rr_text  = f' <span class="rr-badge">Run Rate ฿{stats["gmv_run_rate"]/1e6:.1f}M ({stats["coverage_pct"]}% of month)</span>' if is_rr else ""
-st.markdown(f'## {sel_info["label"]} — Store Health Dashboard {rr_text}', unsafe_allow_html=True)
+st.markdown(f'## AE Deepdive Dashboard {rr_text}', unsafe_allow_html=True)
 st.caption(f'อัพโหลด {sel_info["upload_time"]} · {"จริง ✓" if stats.get("use_real_view") else "proxy"} View/CVR')
 
 
@@ -2818,6 +2818,9 @@ with tab_portfolio:
                 # ── Header ────────────────────────────────────────────────────
                 _pf_cur_g  = float(cur_am["gmv"].sum())
                 _pf_prev_g = float(prev_am["gmv"].sum())
+                _pf_rr_g   = _pf_cur_g / pf_cov if pf_is_rr and pf_cov > 0 else _pf_cur_g
+                _pf_rr_str = f'<div style="font-size:10px;color:#2563EB;font-weight:500">RR {fmt_gmv(_pf_rr_g)}</div>' if pf_is_rr else ""
+                _pf_chg    = (_pf_rr_g - _pf_prev_g) / _pf_prev_g * 100 if _pf_prev_g > 0 else None
                 st.markdown(f"""
 <div style="background:#fff;border:1px solid #e8e8e8;border-radius:10px;padding:16px 20px;margin-bottom:16px">
   <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2828,8 +2831,8 @@ with tab_portfolio:
     <div style="text-align:right">
       <div style="font-size:11px;color:#aaa;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Portfolio GMV</div>
       <div style="font-size:22px;font-weight:700">{fmt_gmv(_pf_cur_g)}</div>
-      {f'<div style="font-size:10px;color:#2563EB;font-weight:500">RR {fmt_gmv(_pf_cur_g/pf_cov)}</div>' if pf_is_rr else ""}
-      <div style="font-size:11px">{arrow_pct((_pf_cur_g/pf_cov-_pf_prev_g)/_pf_prev_g*100 if pf_is_rr and _pf_prev_g>0 else (_pf_cur_g-_pf_prev_g)/_pf_prev_g*100 if _pf_prev_g>0 else None)} vs {pf_prev_lbl}</div>
+      {_pf_rr_str}
+      <div style="font-size:11px">{arrow_pct(_pf_chg)} vs {pf_prev_lbl}</div>
     </div>
   </div>
 </div>""", unsafe_allow_html=True)
