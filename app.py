@@ -1075,7 +1075,8 @@ with tab_ov:
                 p_view   = psh["avg_view"].mean()    if "avg_view"   in psh.columns else 0
                 # Run rate adjust if prev month was incomplete
                 p_gmv_rr = pa["gmv"] / prev_cov if prev_is_rr2 and prev_cov > 0 else pa["gmv"]
-                p_ord_rr = p_orders  / prev_cov if prev_is_rr2 and prev_cov > 0 else p_orders
+                p_orders = int(pa.get("total_orders", p_orders))  # prefer AM-level total_orders
+                p_ord_rr = p_orders / prev_cov if prev_is_rr2 and prev_cov > 0 else p_orders
                 p_view_rr= p_view    / prev_cov if prev_is_rr2 and prev_cov > 0 else p_view
                 prev_am_map[pa["kam"]] = {
                     "gmv":    p_gmv_rr,
@@ -1104,28 +1105,32 @@ with tab_ov:
     # ── AM Scorecard cards with 6 metrics ──────────────────────────────────
     for _, r in am_src_ov.sort_values("avg_health").iterrows():
         am_shops = shops_src[shops_src["kam"]==r["kam"]] if ov_am_sel=="all" else shops_src
-        # Use AM summary data — with fallback to shop-level for old data
         cov = ov_stats.get("coverage_pct", 100) / 100
 
-        # Try AM summary fields (new format)
-        unique_cust   = int(r.get("unique_customers", 0))
-        new_cust      = int(r.get("new_customers", 0))
-        basket_size   = int(r.get("basket_size", 0))
+        # Orders: use total_orders from AM summary (unique booking_id per AM per month)
+        am_orders   = int(r.get("total_orders", 0))
+        new_cust    = int(r.get("new_customers", 0))
+        basket_size = int(r["gmv"] / am_orders) if am_orders > 0 else 0
+
+        # View/CVR from AM summary (new format)
         avg_page_view = float(r.get("avg_page_view", 0))
         avg_cr        = float(r.get("avg_cr_pct", 0))
 
-        # Fallback for old data: compute from shop-level
-        if unique_cust == 0 and len(am_shops):
-            unique_cust = int(am_shops["unique_customers"].sum()) if "unique_customers" in am_shops.columns else 0
-            new_cust    = int(am_shops["new_customers"].sum())    if "new_customers"    in am_shops.columns else 0
-            basket_size = int(r["gmv"] / unique_cust) if unique_cust > 0 else 0
+        # Fallback for old data: use avg from shop-level
+        if am_orders == 0 and len(am_shops):
+            am_orders   = int(am_shops["total_orders"].sum())  if "total_orders"   in am_shops.columns else 0
+            new_cust    = int(am_shops["new_customers"].sum())  if "new_customers"  in am_shops.columns else 0
+            basket_size = int(r["gmv"] / am_orders) if am_orders > 0 else 0
+        if avg_page_view == 0 and len(am_shops):
             avg_page_view = float(am_shops["avg_view"].mean()) if "avg_view" in am_shops.columns else 0
             avg_cr        = float(am_shops["avg_cr"].mean())   if "avg_cr"   in am_shops.columns else 0
 
+        # Run rate
+        am_orders_rr  = am_orders    / cov if ov_is_rr and cov > 0 else am_orders
+        view_rr       = avg_page_view / cov if ov_is_rr and cov > 0 else avg_page_view
+
         # Run rate (pro-rate by coverage for incomplete months)
-        gmv_rr   = r["gmv"]       / cov if ov_is_rr and cov > 0 else r["gmv"]
-        cust_rr  = unique_cust    / cov if ov_is_rr and cov > 0 else unique_cust
-        view_rr  = avg_page_view  / cov if ov_is_rr and cov > 0 else avg_page_view
+        gmv_rr   = r["gmv"] / cov if ov_is_rr and cov > 0 else r["gmv"]
 
         # Prev month values
         prev_am = prev_am_map.get(r["kam"], {})
@@ -1150,7 +1155,7 @@ with tab_ov:
             )
 
         c_gmv    = mk_cell("GMV",        fmt_gmv(r["gmv"]),         rr_val=gmv_rr,   prev_val=p_gmv  or None)
-        c_ord    = mk_cell("Customers",   f"{unique_cust:,}",    rr_val=cust_rr, prev_val=p_ord  or None)
+        c_ord    = mk_cell("Orders",      f"{am_orders:,}",      rr_val=am_orders_rr, prev_val=p_ord or None)
         c_basket = mk_cell("Basket Size", f"฿{basket_size:,}")
         c_new    = mk_cell("New User",    f"{new_cust:,}")
         c_view   = mk_cell("Shop View",   f"{avg_page_view:,.0f}", rr_val=view_rr, prev_val=p_view or None)
