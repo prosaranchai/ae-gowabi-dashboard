@@ -937,35 +937,43 @@ with tab_ov:
         health_color = sc(r["avg_health"])
 
         # Helper: metric cell HTML
-        def mcell(label, main_val, rr_val=None, prev_val=None, color="inherit", extra=""):
-            rr_part  = f'<div style="font-size:9px;color:#185FA5;margin-top:1px">RR {fmt_gmv(rr_val)}</div>' if rr_val and ov_is_rr else ""
-            d_html   = delta_html(rr_val or main_val, prev_val) if prev_val else ""
-            return f"""<div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">
-              <div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{label}</div>
-              <div style="font-size:14px;font-weight:600;color:{color}">{main_val}</div>
-              {rr_part}{d_html}{extra}
-            </div>"""
+        # Pre-compute all metric cells before embedding in HTML
+        def mk_cell(label, main_val, rr_val=None, prev_val=None, color="inherit"):
+            rr_part = (f'<div style="font-size:9px;color:#185FA5;margin-top:1px">RR {fmt_gmv(rr_val)}</div>'
+                       if rr_val and ov_is_rr else "")
+            d_part  = delta_html(rr_val or main_val, prev_val) if prev_val else ""
+            return (
+                '<div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">'
+                f'<div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{label}</div>'
+                f'<div style="font-size:14px;font-weight:600;color:{color}">{main_val}</div>'
+                f'{rr_part}{d_part}'
+                '</div>'
+            )
 
-        st.markdown(f"""
-        <div style="background:#fff;border:1px solid #e8e5e0;border-radius:12px;padding:12px 16px;margin-bottom:8px">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
-            <div style="font-size:14px;font-weight:600;min-width:80px">{r['kam']}</div>
-            <div style="font-size:22px;font-weight:600;color:{health_color}">{r['avg_health']:.1f}</div>
-            <div style="font-size:11px;color:#aaa">{int(r['shops'])} shops</div>
-            <div style="margin-left:auto;font-size:11px">
-              <span style="color:#E24B4A">● {int(r['critical_shops'])} critical</span>&nbsp;&nbsp;
-              <span style="color:#EF9F27">● {int(r['warning_shops'])} warning</span>
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
-            {mcell("GMV",       fmt_gmv(r['gmv']),   rr_val=gmv_rr,    prev_val=p_gmv  if p_gmv  else None)}
-            {mcell("Orders",    f"{int(total_orders):,}", rr_val=orders_rr, prev_val=p_ord  if p_ord  else None)}
-            {mcell("Basket Size", f"฿{basket_size:,.0f}")}
-            {mcell("New User",  f"{int(new_cust):,}")}
-            {mcell("Shop View", f"{avg_view:,.0f}",   rr_val=view_rr,   prev_val=p_view if p_view else None)}
-            {mcell("CVR",       f"{avg_cr:.2f}%",     color=sc(r['avg_cvr']))}
-          </div>
-        </div>""", unsafe_allow_html=True)
+        c_gmv    = mk_cell("GMV",        fmt_gmv(r["gmv"]),         rr_val=gmv_rr,   prev_val=p_gmv  or None)
+        c_ord    = mk_cell("Orders",     f"{int(total_orders):,}",  rr_val=orders_rr, prev_val=p_ord  or None)
+        c_basket = mk_cell("Basket Size",f"฿{basket_size:,.0f}")
+        c_new    = mk_cell("New User",   f"{int(new_cust):,}")
+        c_view   = mk_cell("Shop View",  f"{avg_view:,.0f}",        rr_val=view_rr,  prev_val=p_view or None)
+        c_cvr    = mk_cell("CVR",        f"{avg_cr:.2f}%",          color=sc(r["avg_cvr"]))
+
+        cells_html = c_gmv + c_ord + c_basket + c_new + c_view + c_cvr
+
+        card_html = (
+            '<div style="background:#fff;border:1px solid #e8e5e0;border-radius:12px;padding:12px 16px;margin-bottom:8px">'
+            '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">'
+            f'<div style="font-size:14px;font-weight:600;min-width:80px">{r["kam"]}</div>'
+            f'<div style="font-size:22px;font-weight:600;color:{health_color}">{r["avg_health"]:.1f}</div>'
+            f'<div style="font-size:11px;color:#aaa">{int(r["shops"])} shops</div>'
+            '<div style="margin-left:auto;font-size:11px">'
+            f'<span style="color:#E24B4A">● {int(r["critical_shops"])} critical</span>&nbsp;&nbsp;'
+            f'<span style="color:#EF9F27">● {int(r["warning_shops"])} warning</span>'
+            '</div></div>'
+            '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">'
+            + cells_html +
+            '</div></div>'
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
 
     # Pillar scores
     st.markdown('<div class="section-title">5 Pillar Scores</div>', unsafe_allow_html=True)
