@@ -670,26 +670,88 @@ tab_ov, tab_gmv, tab_cat, tab_new, tab_health, tab_action = st.tabs([
 
 # ══ TAB 0: Overview ══════════════════════════════════════════════════════════
 with tab_ov:
-    # KPIs
-    gmv_show = stats["gmv_run_rate"] if is_rr else stats["gmv"]
-    cr_count = (shops_df["priority"]=="critical").sum() if len(shops_df) else 0
-    wa_count = (shops_df["priority"]=="warning").sum()  if len(shops_df) else 0
-    ah       = shops_df["health_score"].mean() if len(shops_df) else 0
 
+    # ── Month filter (inline at top) ─────────────────────────────────────────
+    all_mk_ov  = sorted(idx_now.keys())
+    ov_m_col1, ov_m_col2 = st.columns([3, 1])
+    with ov_m_col1:
+        ov_month_opts = [idx_now[m]["label"] for m in all_mk_ov]
+        ov_month_sel  = st.select_slider(
+            "เลือกเดือน",
+            options=ov_month_opts,
+            value=idx_now[sel_month]["label"],
+            key="ov_month",
+            label_visibility="collapsed"
+        )
+    # Resolve selected month key
+    ov_mk   = next((m for m in all_mk_ov if idx_now[m]["label"]==ov_month_sel), sel_month)
+    ov_prev = all_mk_ov[all_mk_ov.index(ov_mk)-1] if all_mk_ov.index(ov_mk)>0 else None
+
+    # Load data for selected month (may differ from main sel_month)
+    ov_mdata = load_month_data(ov_mk) if ov_mk != sel_month else mdata
+    ov_stats  = ov_mdata["stats"] if ov_mdata else stats
+    ov_shops  = pd.DataFrame(ov_mdata["shops"]) if ov_mdata else shops_df
+    ov_is_rr  = not ov_stats.get("is_complete", True)
+
+    # Load prev month for comparison
+    ov_prev_stats = idx_now[ov_prev]["stats"] if ov_prev else None
+
+    # ── KPI helpers ───────────────────────────────────────────────────────────
+    def mom_delta(curr, prev, is_float=False):
+        """Return (delta_str, delta_pct_str) for st.metric delta param."""
+        if prev is None or prev == 0: return None
+        d = curr - prev
+        pct = d / prev * 100
+        sign = "+" if d >= 0 else ""
+        pct_str = f"{sign}{pct:.1f}%"
+        return pct_str
+
+    # KPI values
+    gmv_show  = ov_stats["gmv_run_rate"] if ov_is_rr else ov_stats["gmv"]
+    prev_gmv  = ov_prev_stats["gmv_run_rate"] if ov_prev_stats and not ov_prev_stats.get("is_complete",True) else (ov_prev_stats["gmv"] if ov_prev_stats else None)
+    prev_ord  = ov_prev_stats["orders"] if ov_prev_stats else None
+    prev_new  = ov_prev_stats["new_customers"] if ov_prev_stats else None
+
+    cr_count  = (ov_shops["priority"]=="critical").sum() if len(ov_shops) else 0
+    wa_count  = (ov_shops["priority"]=="warning").sum()  if len(ov_shops) else 0
+    ah        = ov_shops["health_score"].mean() if len(ov_shops) else 0
+
+    # ── KPI row ───────────────────────────────────────────────────────────────
     c1,c2,c3,c4,c5,c6 = st.columns(6)
-    c1.metric("GMV" + (" (RR)" if is_rr else ""), fmt_gmv(gmv_show))
-    c2.metric("Shops", f"{len(mdata['shops']):,}")
-    c3.metric("Orders", f"{stats['orders']:,}")
+    c1.metric(
+        "GMV" + (" (RR)" if ov_is_rr else ""),
+        fmt_gmv(gmv_show),
+        delta=mom_delta(gmv_show, prev_gmv),
+        help=f"เทียบกับ {idx_now[ov_prev]['label']}" if ov_prev else "ไม่มีข้อมูลเดือนก่อน"
+    )
+    c2.metric("Shops", f"{len(ov_mdata['shops']):,}")
+    c3.metric(
+        "Orders",
+        f"{ov_stats['orders']:,}",
+        delta=mom_delta(ov_stats['orders'], prev_ord),
+        help=f"เทียบกับ {idx_now[ov_prev]['label']}" if ov_prev else "ไม่มีข้อมูลเดือนก่อน"
+    )
     c4.metric("Critical 🔴", f"{cr_count}")
     c5.metric("Warning 🟡",  f"{wa_count}")
     c6.metric("Avg Health",  f"{ah:.1f}")
 
-    if is_rr:
-        st.info(f"📅 ข้อมูล {stats['days']}/{stats['days_in_month']} วัน ({stats['coverage_pct']}%) — Run Rate GMV = ฿{stats['gmv_run_rate']/1e6:.1f}M")
+    if ov_is_rr:
+        st.info(f"📅 {ov_month_sel}: ข้อมูล {ov_stats['days']}/{ov_stats['days_in_month']} วัน ({ov_stats['coverage_pct']}%) — Run Rate GMV = ฿{ov_stats['gmv_run_rate']/1e6:.1f}M")
+    if ov_prev:
+        prev_lbl = idx_now[ov_prev]["label"]
+        gmv_diff = gmv_show - (prev_gmv or 0)
+        ord_diff = ov_stats["orders"] - (prev_ord or 0)
+        gmv_pct  = gmv_diff/(prev_gmv or 1)*100
+        ord_pct  = ord_diff/(prev_ord or 1)*100
+        st.caption(
+            f"เทียบกับ {prev_lbl}: "
+            f"GMV {'▲' if gmv_diff>=0 else '▼'} {abs(gmv_pct):.1f}% ({fmt_gmv(abs(gmv_diff))})  ·  "
+            f"Orders {'▲' if ord_diff>=0 else '▼'} {abs(ord_pct):.1f}% ({abs(ord_diff):,} orders)"
+        )
 
     # AM scorecard — per-person filter
-    am_full = pd.DataFrame(mdata["am"])
-    shops_full = pd.DataFrame(mdata["shops"])
+    am_full    = pd.DataFrame(ov_mdata["am"])
+    shops_full = pd.DataFrame(ov_mdata["shops"])
 
     st.markdown('<div class="section-title">AM Scorecard — คลิกเพื่อดูรายคน</div>', unsafe_allow_html=True)
     ov_am_sel = st.session_state.get("ov_am_sel", "all")
