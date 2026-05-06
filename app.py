@@ -1051,7 +1051,7 @@ with tab_ov:
 
             for _, pa in prev_am_df.iterrows():
                 psh = prev_sh_df[prev_sh_df["kam"]==pa["kam"]]
-                p_orders = psh["total_orders"].sum() if "total_orders" in psh.columns else 0
+                p_orders = psh["unique_customers"].sum() if "unique_customers" in psh.columns else 0
                 p_view   = psh["avg_view"].mean()    if "avg_view"   in psh.columns else 0
                 # Run rate adjust if prev month was incomplete
                 p_gmv_rr = pa["gmv"] / prev_cov if prev_is_rr2 and prev_cov > 0 else pa["gmv"]
@@ -1079,22 +1079,26 @@ with tab_ov:
     # ── AM Scorecard cards with 6 metrics ──────────────────────────────────
     for _, r in am_src_ov.sort_values("avg_health").iterrows():
         am_shops = shops_src[shops_src["kam"]==r["kam"]] if ov_am_sel=="all" else shops_src
-        total_orders = am_shops["total_orders"].sum() if "total_orders" in am_shops.columns else 0
-        basket_size  = r["gmv"] / total_orders if total_orders > 0 else 0
-        avg_view     = am_shops["avg_view"].mean() if "avg_view" in am_shops.columns else 0
-        avg_cr       = am_shops["avg_cr"].mean()   if "avg_cr"   in am_shops.columns else 0
-        new_cust     = am_shops["new_customers"].sum() if "new_customers" in am_shops.columns else 0
+        # Use unique_customers as "orders" — matches monthly stats (nunique booking_id)
+        unique_cust_sum = am_shops["unique_customers"].sum() if "unique_customers" in am_shops.columns else 0
+        total_orders    = am_shops["total_orders"].sum()     if "total_orders"     in am_shops.columns else 0
+        # Basket size = GMV / unique customers (more meaningful than GMV/service records)
+        basket_size     = r["gmv"] / unique_cust_sum if unique_cust_sum > 0 else 0
+        avg_view        = am_shops["avg_view"].mean() if "avg_view" in am_shops.columns else 0
+        avg_cr          = am_shops["avg_cr"].mean()   if "avg_cr"   in am_shops.columns else 0
+        new_cust        = am_shops["new_customers"].sum() if "new_customers" in am_shops.columns else 0
 
-        # Run rate values for this AM (pro-rate by month coverage)
-        cov = ov_stats.get("coverage_pct", 100) / 100
-        gmv_rr     = r["gmv"]        / cov if ov_is_rr and cov > 0 else r["gmv"]
-        orders_rr  = total_orders    / cov if ov_is_rr and cov > 0 else total_orders
-        view_rr    = avg_view        / cov if ov_is_rr and cov > 0 else avg_view
+        # Run rate values (pro-rate by coverage)
+        cov        = ov_stats.get("coverage_pct", 100) / 100
+        gmv_rr     = r["gmv"]         / cov if ov_is_rr and cov > 0 else r["gmv"]
+        # For orders RR: use unique_customers (not total_orders) to avoid inflation
+        orders_rr  = unique_cust_sum  / cov if ov_is_rr and cov > 0 else unique_cust_sum
+        view_rr    = avg_view         / cov if ov_is_rr and cov > 0 else avg_view
 
         # Prev month values
         prev_am = prev_am_map.get(r["kam"], {})
         p_gmv   = prev_am.get("gmv",    0)
-        p_ord   = prev_am.get("orders", 0)
+        p_ord   = prev_am.get("orders", 0)  # prev month unique_customers
         p_view  = prev_am.get("view",   0)
 
         health_color = sc(r["avg_health"])
@@ -1114,8 +1118,8 @@ with tab_ov:
             )
 
         c_gmv    = mk_cell("GMV",        fmt_gmv(r["gmv"]),         rr_val=gmv_rr,   prev_val=p_gmv  or None)
-        c_ord    = mk_cell("Orders",     f"{int(total_orders):,}",  rr_val=orders_rr, prev_val=p_ord  or None)
-        c_basket = mk_cell("Basket Size",f"฿{basket_size:,.0f}")
+        c_ord    = mk_cell("Customers",   f"{int(unique_cust_sum):,}", rr_val=orders_rr, prev_val=p_ord or None)
+        c_basket = mk_cell("Basket Size", f"฿{basket_size:,.0f}")
         c_new    = mk_cell("New User",   f"{int(new_cust):,}")
         c_view   = mk_cell("Shop View",  f"{avg_view:,.0f}",        rr_val=view_rr,  prev_val=p_view or None)
         c_cvr    = mk_cell("CVR",        f"{avg_cr:.2f}%",          color=sc(r["avg_cvr"]))
