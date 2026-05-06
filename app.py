@@ -22,16 +22,173 @@ st.set_page_config(page_title="Gowabi AM Dashboard", page_icon="💆",
                    layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap');
-html,body,[class*="css"]{font-family:'DM Sans',sans-serif}
-#MainMenu,footer,header{visibility:hidden}
-.block-container{padding:1rem 1.5rem 2rem;max-width:1500px}
-[data-testid="metric-container"]{background:#f8f7f4;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;padding:.85rem 1rem}
-[data-testid="metric-container"] label{font-size:11px !important;color:#888 !important}
-[data-testid="metric-container"] [data-testid="metric-value"]{font-size:20px !important;font-weight:500 !important}
-[data-testid="stSidebar"]{background:#f2f0ec;border-right:0.5px solid rgba(0,0,0,0.08)}
-.section-title{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:#999;margin:.75rem 0 .4rem}
-.rr-badge{display:inline-block;background:#E6F1FB;color:#185FA5;font-size:10px;padding:2px 8px;border-radius:10px;margin-left:6px}
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Base ── */
+html, body, [class*="css"] {
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  color: #1a1a1a;
+  background: #fafafa;
+  -webkit-font-smoothing: antialiased;
+}
+#MainMenu, footer, header { visibility: hidden }
+
+/* ── Layout ── */
+.block-container { padding: 1.5rem 2rem 3rem; max-width: 1480px }
+[data-testid="stSidebar"] {
+  background: #fff;
+  border-right: 1px solid #ebebeb;
+}
+[data-testid="stSidebar"] * { font-size: 12px }
+
+/* ── Metric cards ── */
+[data-testid="metric-container"] {
+  background: #fff;
+  border: 1px solid #ebebeb;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  transition: border-color .15s;
+}
+[data-testid="metric-container"]:hover { border-color: #d0d0d0 }
+[data-testid="metric-container"] label {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: .06em !important;
+  text-transform: uppercase !important;
+  color: #aaa !important;
+}
+[data-testid="metric-container"] [data-testid="metric-value"] {
+  font-size: 22px !important;
+  font-weight: 600 !important;
+  letter-spacing: -.02em !important;
+  font-family: 'Sora', sans-serif !important;
+}
+[data-testid="metric-container"] [data-testid="metric-delta"] {
+  font-size: 11px !important;
+}
+
+/* ── Tabs ── */
+[data-testid="stTabs"] button {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase !important;
+  padding: 6px 14px !important;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+  font-weight: 600 !important;
+}
+
+/* ── Buttons ── */
+[data-testid="stButton"] button {
+  font-family: 'Sora', sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: .02em !important;
+  border-radius: 6px !important;
+  border: 1px solid #e0e0e0 !important;
+  transition: all .12s !important;
+}
+[data-testid="stButton"] button:hover {
+  border-color: #aaa !important;
+  background: #f5f5f5 !important;
+}
+[data-testid="stButton"] button[kind="primary"] {
+  border-color: #1a1a1a !important;
+  background: #1a1a1a !important;
+  color: #fff !important;
+}
+
+/* ── Inputs & selects ── */
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stTextInput"] input,
+[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+  font-size: 12px !important;
+  border-radius: 6px !important;
+  border-color: #e0e0e0 !important;
+  background: #fff !important;
+}
+
+/* ── Dataframe ── */
+[data-testid="stDataFrame"] {
+  border: 1px solid #ebebeb !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+.stDataFrame thead tr th {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .06em !important;
+  text-transform: uppercase !important;
+  color: #888 !important;
+  background: #fafafa !important;
+  border-bottom: 1px solid #ebebeb !important;
+  padding: 8px 10px !important;
+}
+.stDataFrame tbody tr td {
+  font-size: 12px !important;
+  padding: 7px 10px !important;
+  border-bottom: 1px solid #f5f5f5 !important;
+  font-family: 'Sora', sans-serif !important;
+}
+.stDataFrame tbody tr:last-child td { border-bottom: none !important }
+.stDataFrame tbody tr:hover td { background: #fafafa !important }
+
+/* ── Charts ── */
+[data-testid="stVegaLiteChart"], [data-testid="stArrowVegaLiteChart"] {
+  border-radius: 8px !important;
+}
+
+/* ── Section titles ── */
+.section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+  color: #bbb;
+  margin: 1.25rem 0 .6rem;
+}
+
+/* ── RR badge ── */
+.rr-badge {
+  display: inline-block;
+  background: #EFF6FF;
+  color: #2563EB;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+  letter-spacing: .03em;
+}
+
+/* ── Priority badges ── */
+.bxr { background:#FEF2F2; color:#DC2626; font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; letter-spacing:.03em }
+.bxa { background:#FFFBEB; color:#D97706; font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; letter-spacing:.03em }
+.bxg { background:#F0FDF4; color:#16A34A; font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; letter-spacing:.03em }
+
+/* ── Expander ── */
+[data-testid="stExpander"] {
+  border: 1px solid #ebebeb !important;
+  border-radius: 8px !important;
+}
+[data-testid="stExpander"] summary {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+/* ── Info / warning boxes ── */
+[data-testid="stInfo"], [data-testid="stAlert"] {
+  border-radius: 6px !important;
+  font-size: 12px !important;
+}
+
+/* ── Mono numbers ── */
+.num { font-family: 'JetBrains Mono', monospace; font-size: 12px }
+
+/* ── Divider ── */
+hr { border: none; border-top: 1px solid #ebebeb; margin: 1rem 0 }
 </style>
 """, unsafe_allow_html=True)
 
@@ -364,11 +521,26 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
             "use_real_view":   use_real,
         }
 
+        # Build full service-level price table for Price pillar drill-down
+        svc_all = mdf.groupby(["shop_id_s","organization_name","kam","category","service_name"]).agg(
+            sell  = ("selling_price",   "mean"),
+            low12 = ("lowest_price_12m","mean"),
+            gmv   = ("gmv",             "sum"),
+            orders= ("booking_id",      "count"),
+        ).reset_index()
+        svc_all["sell"]  = svc_all["sell"].round(0)
+        svc_all["low12"] = svc_all["low12"].round(0)
+        svc_all["pct"]   = ((svc_all["sell"]-svc_all["low12"])/svc_all["low12"].replace(0,np.nan)*100).round(1).fillna(0)
+        svc_all["gmv"]   = svc_all["gmv"].round(0).astype(int)
+        svc_price_table  = svc_all[svc_all["pct"] > 0].sort_values("pct", ascending=False)
+
         result["months"][mkey] = {
-            "shops":     agg.to_dict("records"),
-            "am":        am.to_dict("records"),
-            "category":  cat.to_dict("records"),
-            "stats":     monthly_stat,
+            "shops":       agg.to_dict("records"),
+            "am":          am.to_dict("records"),
+            "category":    cat.to_dict("records"),
+            "stats":       monthly_stat,
+            "svc_price":   svc_price_table[["shop_id_s","organization_name","kam","category",
+                                             "service_name","sell","low12","pct","gmv","orders"]].to_dict("records"),
         }
 
     # ── Cross-month trend: KAM ────────────────────────────────────────────
@@ -766,8 +938,8 @@ st.caption(f'อัพโหลด {sel_info["upload_time"]} · {"จริง �
 
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab_ov, tab_gmv, tab_cat, tab_new, tab_health, tab_action = st.tabs([
-    "📊 Overview", "📈 GMV MoM", "🗂️ Category", "👥 New User", "🏪 Store Health", "⚡ Action List"
+tab_ov, tab_gmv, tab_cat, tab_new, tab_health, tab_action, tab_upload = st.tabs([
+    "📊 Overview", "📈 GMV MoM", "🗂️ Category", "👥 New User", "🏪 Store Health", "⚡ Action List", "📤 Upload"
 ])
 
 
@@ -934,8 +1106,8 @@ with tab_ov:
                        if rr_val and ov_is_rr else "")
             d_part  = delta_html(rr_val or main_val, prev_val) if prev_val else ""
             return (
-                '<div style="background:#f8f7f4;border-radius:8px;padding:8px 10px;text-align:center">'
-                f'<div style="font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{label}</div>'
+                '<div style="background:#fafafa;border-radius:6px;padding:9px 10px;text-align:center;border:1px solid #f0f0f0">'
+                f'<div style="font-size:9px;font-weight:600;color:#bbb;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">{label}</div>'
                 f'<div style="font-size:14px;font-weight:600;color:{color}">{main_val}</div>'
                 f'{rr_part}{d_part}'
                 '</div>'
@@ -951,10 +1123,10 @@ with tab_ov:
         cells_html = c_gmv + c_ord + c_basket + c_new + c_view + c_cvr
 
         card_html = (
-            '<div style="background:#fff;border:1px solid #e8e5e0;border-radius:12px;padding:12px 16px;margin-bottom:8px">'
+            '<div style="background:#fff;border:1px solid #ebebeb;border-radius:8px;padding:14px 18px;margin-bottom:8px">'
             '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">'
-            f'<div style="font-size:14px;font-weight:600;min-width:80px">{r["kam"]}</div>'
-            f'<div style="font-size:22px;font-weight:600;color:{health_color}">{r["avg_health"]:.1f}</div>'
+            f'<div style="font-size:13px;font-weight:600;letter-spacing:-.01em;min-width:80px">{r["kam"]}</div>'
+            f'<div style="font-size:24px;font-weight:600;letter-spacing:-.03em;color:{health_color}">{r["avg_health"]:.1f}</div>'
             f'<div style="font-size:11px;color:#aaa">{int(r["shops"])} shops</div>'
             '<div style="margin-left:auto;font-size:11px">'
             f'<span style="color:#E24B4A">● {int(r["critical_shops"])} critical</span>&nbsp;&nbsp;'
@@ -979,17 +1151,17 @@ with tab_ov:
          "desc": "ร้านที่ราคาสูงกว่า lowest 12m",
          "detail_cols": ["organization_name","kam","category","selling_price_mean","lowest_price_12m","price_above","price_score"],
          "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","selling_price_mean":"Selling","lowest_price_12m":"Lowest 12m","price_above":"Above%","price_score":"Score"},
-         "sort_asc": True, "threshold": 50},
+         "sort_asc": True, "threshold": 50, "use_svc_level": True},
         {"name": "View MoM",   "score_col": "view_score",  "am_key": "avg_view",
          "desc": "ร้านที่ view ลดลงจากเดือนก่อน",
          "detail_cols": ["organization_name","kam","category","avg_view","view_mom_pct","view_score"],
          "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_view":"Views/mo","view_mom_pct":"MoM%","view_score":"Score"},
-         "sort_asc": True, "threshold": 40},
+         "sort_asc": True, "threshold": 40, "use_mom_compare": True},
         {"name": "CVR MoM",    "score_col": "cvr_score",   "am_key": "avg_cvr",
          "desc": "ร้านที่ conversion rate ลดลง",
          "detail_cols": ["organization_name","kam","category","avg_cr","cvr_mom_pct","cvr_score"],
          "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_cr":"CR%","cvr_mom_pct":"MoM%","cvr_score":"Score"},
-         "sort_asc": True, "threshold": 40},
+         "sort_asc": True, "threshold": 40, "use_mom_compare": True},
     ]
 
     sel_pillar = st.session_state.get("sel_pillar_ov", None)
@@ -1002,7 +1174,7 @@ with tab_ov:
         is_sel = sel_pillar == pm["name"]
         border = "2px solid #1a5fa8" if is_sel else "1px solid #e8e5e0"
 
-        col.markdown(f"""<div style="background:#f8f7f4;border-radius:10px;padding:.75rem 1rem;border:{border}">
+        col.markdown(f"""<div style="background:#fff;border-radius:8px;padding:1rem 1.1rem;border:{border}">
           <div style="font-size:9px;color:#999;font-weight:500;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">{pm['name']}</div>
           <div style="font-size:20px;font-weight:500;color:{sc(avg)}">{avg:.0f}</div>
           <div style="height:4px;background:#e5e3de;border-radius:2px;margin:4px 0">
@@ -1038,43 +1210,160 @@ with tab_ov:
         if len(drill) == 0:
             st.success(f"✓ ไม่มีร้านที่ต้องแก้ใน {sel_pillar} ครับ")
         else:
-            available_cols = [c for c in pm["detail_cols"] if c in drill.columns]
-            tbl_drill = drill[available_cols].rename(columns=pm["detail_labels"]).copy()
+            # ── Price pillar: service-level view ──────────────────────────
+            if pm.get("use_svc_level") and "svc_price" in ov_mdata:
+                svc_df = pd.DataFrame(ov_mdata["svc_price"])
+                if len(svc_df):
+                    # Filter by AM
+                    if ov_am_sel != "ทั้งหมด":
+                        svc_df = svc_df[svc_df["kam"]==ov_am_sel]
+                    # Only services with pct > 0
+                    svc_df = svc_df[svc_df["pct"] > 0].sort_values("pct", ascending=False)
 
-            # Format numbers
-            for c in tbl_drill.columns:
-                if c in ["Score"]:
-                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x)}")
-                elif c in ["Selling","Lowest 12m"]:
-                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"฿{x:,.0f}")
-                elif c in ["Above%","MoM%"]:
-                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:+.0f}%")
-                elif c == "CR%":
-                    tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:.2f}%")
+                    # Toggle shop/service view
+                    view_mode = st.radio("แสดงแบบ", ["Service Level", "Shop Level"],
+                                         horizontal=True, key="price_drill_mode")
 
-            def css_score(v):
-                try: return f"color:{sc(float(v))};font-weight:500"
-                except: return ""
-            def css_pct(v):
-                if not isinstance(v,str): return ""
-                return "color:#d94040;font-weight:500" if v.startswith("-") else "color:#3a7d2c;font-weight:500"
+                    if view_mode == "Service Level":
+                        tbl_svc = svc_df[["service_name","organization_name","kam","category","sell","low12","pct","gmv","orders"]].copy()
+                        tbl_svc.columns = ["Service","Shop","AM","Category","Selling","Lowest 12m","Above%","GMV","Orders"]
+                        tbl_svc["Selling"]    = tbl_svc["Selling"].apply(lambda x: f"฿{x:,.0f}")
+                        tbl_svc["Lowest 12m"] = tbl_svc["Lowest 12m"].apply(lambda x: f"฿{x:,.0f}")
+                        tbl_svc["Above%"]     = tbl_svc["Above%"].apply(lambda x: f"+{x:.0f}%")
+                        tbl_svc["GMV"]        = tbl_svc["GMV"].apply(fmt_gmv)
 
-            styled_drill = tbl_drill.style.map(css_score, subset=["Score"])
-            if "MoM%" in tbl_drill.columns:
-                styled_drill = styled_drill.map(css_pct, subset=["MoM%"])
-            if "Above%" in tbl_drill.columns:
-                styled_drill = styled_drill.map(css_pct, subset=["Above%"])
-            styled_drill = styled_drill.set_properties(**{"font-size":"12px"})
+                        def css_above(v):
+                            if not isinstance(v,str): return ""
+                            try:
+                                f = float(v.replace("+","").replace("%",""))
+                                return "color:#d94040;font-weight:600" if f>=30 else "color:#EF9F27;font-weight:500" if f>=15 else "color:#888"
+                            except: return ""
 
-            st.dataframe(styled_drill, use_container_width=True,
-                         height=min(400, 40 + len(tbl_drill)*36))
-            st.caption(f"ดาวน์โหลด")
-            st.download_button(
-                f"⬇ {sel_pillar}_shops.csv",
-                to_csv(drill[available_cols]),
-                f"{sel_pillar.lower().replace(' ','_')}_{ov_mk}.csv",
-                "text/csv"
-            )
+                        styled_svc = (tbl_svc.style
+                            .map(css_above, subset=["Above%"])
+                            .set_properties(**{"font-size":"11px"}))
+                        st.dataframe(styled_svc, hide_index=True, use_container_width=True,
+                                     height=min(500, 44 + len(tbl_svc)*36))
+                        st.download_button("⬇ overpriced_services.csv", to_csv(svc_df),
+                                           f"price_services_{ov_mk}.csv", "text/csv")
+                    else:
+                        # Shop level (original)
+                        available_cols = [c for c in pm["detail_cols"] if c in drill.columns]
+                        tbl_drill = drill[available_cols].rename(columns=pm["detail_labels"]).copy()
+                        tbl_drill["Selling"]    = tbl_drill["Selling"].apply(lambda x: f"฿{x:,.0f}")
+                        tbl_drill["Lowest 12m"] = tbl_drill["Lowest 12m"].apply(lambda x: f"฿{x:,.0f}")
+                        tbl_drill["Above%"]     = tbl_drill["Above%"].apply(lambda x: f"+{x:.0f}%")
+                        tbl_drill["Score"]      = tbl_drill["Score"].apply(lambda x: f"{int(x)}")
+                        styled_drill = (tbl_drill.style
+                            .set_properties(**{"font-size":"12px"}))
+                        st.dataframe(styled_drill, use_container_width=True,
+                                     height=min(400, 40 + len(tbl_drill)*36))
+                        st.download_button("⬇ price_shops.csv", to_csv(drill[available_cols]),
+                                           f"price_shops_{ov_mk}.csv", "text/csv")
+            else:
+                # ── Other pillars (SKU, View MoM, CVR MoM) ─────────────────
+                available_cols = [c for c in pm["detail_cols"] if c in drill.columns]
+                tbl_drill = drill[available_cols].rename(columns=pm["detail_labels"]).copy()
+
+                # Add prev month comparison from Supabase data
+                if pm.get("use_mom_compare") and ov_prev:
+                    prev_md_drill  = load_month_data(ov_prev)
+                    prev_lbl_drill = idx_now[ov_prev]["label"]
+                    if prev_md_drill:
+                        prev_sh = pd.DataFrame(prev_md_drill.get("shops",[]))
+                        if len(prev_sh):
+                            id_col     = "shop_id_s"
+                            cur_id_col = "shop_id_s" if "shop_id_s" in drill.columns else "organization_name"
+
+                            # View MoM
+                            if "avg_view" in drill.columns and "avg_view" in prev_sh.columns:
+                                prev_v = prev_sh.set_index(id_col)["avg_view"].to_dict()
+                                cur_v  = drill.set_index(cur_id_col)["avg_view"].to_dict()
+                                cur_ids = drill[cur_id_col].values
+
+                                prev_col_vals, mom_vals = [], []
+                                for sid in cur_ids:
+                                    pv = prev_v.get(str(sid), 0)
+                                    cv = cur_v.get(str(sid), 0)
+                                    prev_col_vals.append(f"{int(pv):,}")
+                                    if pv > 0:
+                                        mom_vals.append(f"{(cv-pv)/pv*100:+.0f}%")
+                                    elif cv > 0:
+                                        mom_vals.append("new")
+                                    else:
+                                        mom_vals.append("–")
+
+                                # Insert prev + MoM after Views/mo
+                                if "Views/mo" in tbl_drill.columns:
+                                    insert_pos = list(tbl_drill.columns).index("Views/mo") + 1
+                                    tbl_drill.insert(insert_pos,     prev_lbl_drill, prev_col_vals)
+                                    tbl_drill.insert(insert_pos + 1, "MoM%",         mom_vals)
+                                else:
+                                    tbl_drill[prev_lbl_drill] = prev_col_vals
+                                    tbl_drill["MoM%"]         = mom_vals
+
+                            # CVR MoM
+                            if "avg_cr" in drill.columns and "avg_cr" in prev_sh.columns:
+                                prev_cr = prev_sh.set_index(id_col)["avg_cr"].to_dict()
+                                cur_cr  = drill.set_index(cur_id_col)["avg_cr"].to_dict()
+                                cur_ids = drill[cur_id_col].values
+
+                                prev_cr_vals, mom_cr_vals = [], []
+                                for sid in cur_ids:
+                                    pc = prev_cr.get(str(sid), 0)
+                                    cc = cur_cr.get(str(sid), 0)
+                                    prev_cr_vals.append(f"{pc:.2f}%")
+                                    if pc > 0:
+                                        mom_cr_vals.append(f"{(cc-pc)/pc*100:+.0f}%")
+                                    elif cc > 0:
+                                        mom_cr_vals.append("new")
+                                    else:
+                                        mom_cr_vals.append("–")
+
+                                if "CR%" in tbl_drill.columns:
+                                    insert_pos = list(tbl_drill.columns).index("CR%") + 1
+                                    tbl_drill.insert(insert_pos,     prev_lbl_drill, prev_cr_vals)
+                                    tbl_drill.insert(insert_pos + 1, "MoM%",         mom_cr_vals)
+                                else:
+                                    tbl_drill[prev_lbl_drill] = prev_cr_vals
+                                    tbl_drill["MoM%"]         = mom_cr_vals
+
+                # Format numbers
+                for c in tbl_drill.columns:
+                    if c == "Score":
+                        tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x)}" if isinstance(x,(int,float)) and str(x) not in ['nan'] else x)
+                    elif c == "SKUs":
+                        tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x):,}" if isinstance(x,(int,float)) else x)
+                    elif c == "Views/mo":
+                        tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x):,}" if isinstance(x,(int,float)) else x)
+                    elif c == "MoM%":
+                        tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:+.0f}%" if isinstance(x,(int,float)) else x)
+                    elif c == "CR%":
+                        tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:.2f}%" if isinstance(x,(int,float)) else x)
+
+                def css_score2(v):
+                    try: return f"color:{sc(float(v))};font-weight:500"
+                    except: return ""
+                def css_pct2(v):
+                    if not isinstance(v,str): return ""
+                    try:
+                        f2 = float(v.replace("%","").replace("+",""))
+                        return "color:#d94040;font-weight:500" if f2 < 0 else "color:#3a7d2c;font-weight:500" if f2 > 0 else "color:#aaa"
+                    except: return ""
+
+                styled_drill = tbl_drill.style.map(css_score2, subset=["Score"])
+                if "MoM%" in tbl_drill.columns:
+                    styled_drill = styled_drill.map(css_pct2, subset=["MoM%"])
+                styled_drill = styled_drill.set_properties(**{"font-size":"12px"})
+
+                st.dataframe(styled_drill, use_container_width=True,
+                             height=min(460, 40 + len(tbl_drill)*36))
+                st.download_button(
+                    f"⬇ {sel_pillar}_shops.csv",
+                    to_csv(drill[available_cols]),
+                    f"{sel_pillar.lower().replace(' ','_')}_{ov_mk}.csv",
+                    "text/csv"
+                )
 
 
 # ══ TAB 1: GMV MoM ════════════════════════════════════════════════════════════
@@ -1092,7 +1381,11 @@ with tab_gmv:
             gmv_am_filt = st.selectbox("Filter by KAM", ["ทั้งหมด"]+sorted(REAL_AMS), key="gmv_am")
         with gf2:
             # Shop search filter
-            all_shop_names = sorted(trend_shop["organization_name"].unique()) if len(trend_shop) else []
+            # Shop names loaded from all months on demand
+            all_shop_names = sorted(
+                set(s.get("organization_name","") for mk in idx_now
+                    for s in ((load_month_data(mk) or {}).get("shops",[])))
+            ) if idx_now else []
             gmv_shop_filt  = st.multiselect("Filter by Shop (เว้นว่าง = ทั้งหมด)",
                                              all_shop_names, default=[], key="gmv_shop",
                                              placeholder="เลือกร้านที่ต้องการ…")
@@ -1131,17 +1424,38 @@ with tab_gmv:
         col3,col4 = st.columns(2)
         with col3:
             st.markdown('<div class="section-title">All Shops — GMV by Month (฿K)</div>', unsafe_allow_html=True)
-            if len(trend_shop):
-                ts = trend_shop.copy()
+
+            # Build from per-month shop data (includes ALL shops, not just top 30)
+            with st.spinner("โหลดข้อมูลทุกร้าน…"):
+                all_shop_rows = []
+                for mk in sorted(idx_now.keys()):
+                    md_tmp = load_month_data(mk)
+                    if not md_tmp: continue
+                    for s in md_tmp.get("shops", []):
+                        all_shop_rows.append({
+                            "organization_name": s.get("organization_name",""),
+                            "kam":               s.get("kam",""),
+                            "month":             mk,
+                            "gmv":               s.get("gmv", 0),
+                        })
+                ts_all = pd.DataFrame(all_shop_rows) if all_shop_rows else pd.DataFrame()
+
+            if len(ts_all):
+                ts = ts_all.copy()
                 if gmv_am_filt != "ทั้งหมด": ts = ts[ts["kam"]==gmv_am_filt]
                 if gmv_shop_filt: ts = ts[ts["organization_name"].isin(gmv_shop_filt)]
-                top_all = ts.groupby("organization_name")["gmv"].sum().sort_values(ascending=False).index
-                ts = ts[ts["organization_name"].isin(top_all)]
 
-                # Pivot: rows=shops, columns=months (฿K)
-                tp_raw = ts.pivot(index="organization_name", columns="month", values="gmv").fillna(0)
-                all_mks = sorted(tp_raw.columns)
-                tp_raw = tp_raw[all_mks].sort_values(all_mks[-1] if all_mks else all_mks[0], ascending=False)
+                # Pivot: rows=shops, columns=months — fill 0 for missing months
+                tp_raw = ts.pivot_table(index="organization_name", columns="month",
+                                        values="gmv", aggfunc="sum", fill_value=0)
+                all_mks = sorted(idx_now.keys())
+                # Ensure all months appear even if shop had 0 that month
+                for mk in all_mks:
+                    if mk not in tp_raw.columns:
+                        tp_raw[mk] = 0
+                tp_raw = tp_raw[all_mks]
+                # Sort by latest month GMV desc
+                tp_raw = tp_raw.sort_values(all_mks[-1], ascending=False)
 
                 # Build display DataFrame with RR and %chg columns
                 display_rows = []
@@ -1571,7 +1885,7 @@ with tab_action:
 
         with st.container():
             st.markdown(f"""
-            <div style="background:#fff;border:1px solid #e8e5e0;border-radius:10px;padding:10px 14px;margin-bottom:4px">
+            <div style="background:#fff;border:1px solid #ebebeb;border-radius:8px;padding:14px 18px;margin-bottom:6px">
               <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:6px">
                 <div style="background:{priority_color};color:{priority_text};font-size:10px;padding:2px 8px;border-radius:8px;font-weight:500;white-space:nowrap;margin-top:1px">{row['priority']}</div>
                 <div style="flex:1">
@@ -1604,3 +1918,111 @@ with tab_action:
         st.caption(f"แสดง 80 อันดับแรก จาก {len(action_shops)} ร้าน")
     d3 = datetime.now().strftime("%Y%m%d")
     st.download_button("⬇ action_list.csv", to_csv(action_shops[["organization_name","kam","category","health_score","priority","alert_count","alerts"]]), f"action_list_{sel_month}.csv","text/csv")
+
+
+# ══ TAB 6: Upload ════════════════════════════════════════════════════════════
+with tab_upload:
+    st.markdown("### 📤 Upload ข้อมูลใหม่")
+
+    col_up, col_info = st.columns([2, 1])
+    with col_up:
+        pw_tab = st.text_input("Password", type="password", key="pw_tab",
+                               placeholder="ใส่ password เพื่อ upload")
+
+        if pw_tab == st.secrets.get("ADMIN_PASSWORD","gowabi2024"):
+            st.success("✓ Authenticated")
+            st.markdown("---")
+
+            tx_file_tab   = st.file_uploader("ไฟล์ที่ 1 — Transaction (csv/xlsx) ✱",
+                                              type=["csv","xlsx"], key="tx_tab")
+            view_file_tab = st.file_uploader("ไฟล์ที่ 2 — View/CR (csv) — ไม่บังคับ",
+                                              type=["csv"], key="view_tab")
+
+            if tx_file_tab:
+                try:
+                    tmp2 = pd.read_csv(io.BytesIO(tx_file_tab.read()),
+                                       usecols=["service_created_at","kam"], low_memory=False)
+                    tx_file_tab.seek(0)
+                    tmp2["ts"] = pd.to_datetime(tmp2["service_created_at"], errors="coerce")
+                    tmp2 = tmp2[tmp2["kam"].isin(REAL_AMS)]
+                    found_m2 = sorted(tmp2["ts"].dt.to_period("M").dropna().unique())
+                    st.info(f"พบข้อมูล **{len(found_m2)} เดือน**: " +
+                            ", ".join([MONTH_LABELS[p.month-1]+f" {p.year}" for p in found_m2]))
+                except Exception:
+                    pass
+
+            up_mode_tab = st.radio(
+                "โหมด",
+                ["🔄 Overwrite — แทนที่ข้อมูลเดือนที่มีอยู่",
+                 "➕ Append — เพิ่มเฉพาะเดือนใหม่"],
+                key="up_mode_tab"
+            )
+            is_ow_tab = up_mode_tab.startswith("🔄")
+
+            if tx_file_tab and st.button("🚀 Process & Upload", type="primary",
+                                          use_container_width=True, key="btn_tab"):
+                try:
+                    with st.spinner("Processing… อาจใช้เวลา 1–3 นาที"):
+                        tx_file_tab.seek(0)
+                        result2 = process_raw(
+                            tx_file_tab.read(),
+                            view_file_tab.read() if view_file_tab else None
+                        )
+                    idx_fresh2 = load_index()
+                    saved2 = []
+                    for mkey2, mdata2 in result2["months"].items():
+                        if not is_ow_tab and mkey2 in idx_fresh2:
+                            continue
+                        save_month(mkey2, mdata2)
+                        idx_fresh2[mkey2] = {
+                            "label":       mdata2["stats"]["label"],
+                            "upload_time": result2["upload_time"],
+                            "stats":       mdata2["stats"],
+                        }
+                        saved2.append(mkey2)
+                    if result2.get("trend"):
+                        save_trend(result2["trend"])
+                    save_index(idx_fresh2)
+                    load_index_cached.clear()
+                    load_month_data.clear()
+                    load_trend_data.clear()
+                    if saved2:
+                        mlabels2 = [MONTH_LABELS[int(m.split("-")[1])-1]+" "+m.split("-")[0]
+                                    for m in sorted(saved2)]
+                        st.success(f"✓ บันทึกแล้ว: {', '.join(mlabels2)}")
+                        st.balloons()
+                        st.rerun()
+                except RuntimeError as e:
+                    st.error(str(e))
+                except Exception as e:
+                    st.error(f"Error: {type(e).__name__}: {e}")
+
+        elif pw_tab:
+            st.error("Password ไม่ถูกต้อง")
+        else:
+            st.info("ใส่ password เพื่อเริ่ม upload")
+
+    with col_info:
+        st.markdown("**วิธีใช้**")
+        st.markdown("""
+- **Overwrite** — ใช้เมื่อต้องการอัพเดทข้อมูลเดือนเดิม
+- **Append** — ใช้เมื่อ upload เดือนใหม่เพิ่มเข้ามา
+
+**ไฟล์ที่ต้องการ:**
+- Transaction CSV/xlsx (raw data)
+- View/CR CSV (optional — ถ้ามีจะได้ View MoM และ CVR MoM จริง)
+
+**หลัง upload:**
+ข้อมูลจะอัพเดทให้ทีมเห็นทันทีครับ
+        """)
+
+        # Manage data
+        idx3 = load_index_cached()
+        if idx3:
+            st.markdown("---")
+            st.markdown("**ข้อมูลที่เก็บไว้**")
+            for mk3 in sorted(idx3.keys(), reverse=True):
+                p3 = idx3[mk3]
+                s3 = p3.get("stats",{})
+                rr3 = "🔵 RR" if not s3.get("is_complete",True) else "✓"
+                st.caption(f"{rr3} **{p3['label']}** · {s3.get('days',0)}/{s3.get('days_in_month',30)} วัน · อัพ {p3['upload_time']}")
