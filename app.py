@@ -1085,8 +1085,13 @@ with tab_ov:
 
     def delta_html(curr, prev_val, fmt_fn=None, suffix=""):
         """Return colored % change HTML string."""
+        try:
+            curr     = float(curr)
+            prev_val = float(prev_val)
+        except (TypeError, ValueError):
+            return ""
         if not prev_val or prev_val == 0: return ""
-        pct = (curr - prev_val) / prev_val * 100
+        pct   = (curr - prev_val) / prev_val * 100
         color = "#3a7d2c" if pct >= 0 else "#d94040"
         arrow = "▲" if pct >= 0 else "▼"
         return f'<span style="font-size:10px;color:{color};font-weight:500">{arrow}{abs(pct):.0f}%</span>'
