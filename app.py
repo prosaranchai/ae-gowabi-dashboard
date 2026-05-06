@@ -262,11 +262,10 @@ def sb_delete(key: str):
     get_sb().table("dashboard_kv").delete().eq("key", key).execute()
 
 # ─── Comment system ──────────────────────────────────────────────────────────
-def save_comment(shop_id: str, month: str, kam_name: str, text: str, status: str):
+def save_comment(shop_id: str, month: str, kam_name: str, text: str, status: str,
+                  task_type: str = "", due_date: str = ""):
     """Save a comment for a shop. Key = comments_{shop_id}_{month}"""
-    import base64, gzip as _gz
     key = f"comments_{shop_id}_{month}"
-    # Load existing
     try:
         raw = sb_download(key)
         existing = json.loads(raw)
@@ -276,6 +275,8 @@ def save_comment(shop_id: str, month: str, kam_name: str, text: str, status: str
         "kam":       kam_name,
         "text":      text,
         "status":    status,
+        "task_type": task_type,
+        "due_date":  due_date,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
     sb_upload(key, json.dumps(existing, ensure_ascii=False))
@@ -730,8 +731,8 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
     result["trend"]["shops"] = sm[["organization_name","kam","month","gmv"]].to_dict("records")
 
     # ── Cross-month trend: Top services ──────────────────────────────────
-    svc_top = df.groupby("service_name")["gmv"].sum().nlargest(30).index
-    sv = df[df["service_name"].isin(svc_top)].groupby(["service_name","month_period"])["gmv"].sum().reset_index()
+    # Store all services (no limit) for GMV by month table
+    sv = df.groupby(["service_name","month_period"])["gmv"].sum().reset_index()
     sv["month"] = sv["month_period"].astype(str)
     sv["gmv"]   = sv["gmv"].round(0).astype(int)
     result["trend"]["services"] = sv[["service_name","month","gmv"]].to_dict("records")
@@ -1890,14 +1891,55 @@ with tab_gmv:
                 st.dataframe(styled_tp, use_container_width=True, height=420)
 
         with col4:
-            st.markdown('<div class="section-title">Top 20 Services — GMV Total (฿K)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">All Services — GMV by Month (฿K)</div>', unsafe_allow_html=True)
             if len(trend_svc):
                 sv = trend_svc.copy()
                 sv["gmv"] = pd.to_numeric(sv["gmv"], errors="coerce").fillna(0)
-                sv = sv.groupby("service_name")["gmv"].sum().nlargest(20).reset_index()
-                sv["gmv"] = (sv["gmv"]/1e3).round(0)
-                sv.columns = ["Service","GMV (฿K)"]
-                st.dataframe(sv, hide_index=True, use_container_width=True, height=320)
+                # Apply KAM filter if set (need shop→kam map)
+                # Build pivot: rows=service, cols=months
+                sv_pivot = sv.pivot_table(
+                    index="service_name", columns="month",
+                    values="gmv", aggfunc="sum", fill_value=0
+                )
+                all_mks_svc = sorted(idx_now.keys())
+                for mk in all_mks_svc:
+                    if mk not in sv_pivot.columns:
+                        sv_pivot[mk] = 0
+                sv_pivot = sv_pivot[all_mks_svc]
+                sv_pivot["Total"] = sv_pivot.sum(axis=1)
+                sv_pivot = sv_pivot.sort_values("Total", ascending=False)
+                sv_pivot = (sv_pivot / 1e3).round(0)
+                # Rename month columns + add Δ
+                ordered_cols = []
+                prev_mk_s = None
+                for mk in all_mks_svc:
+                    lbl = idx_now[mk]["label"]
+                    sv_pivot[lbl] = sv_pivot[mk]
+                    if prev_mk_s:
+                        prev_lbl = idx_now[prev_mk_s]["label"]
+                        delta_col = f"{lbl} Δ"
+                        sv_pivot[delta_col] = sv_pivot[[mk, prev_mk_s]].apply(
+                            lambda r: f"{(r[mk]-r[prev_mk_s])/r[prev_mk_s]*100:+.0f}%" if r[prev_mk_s]>0 else ("new" if r[mk]>0 else "–"),
+                            axis=1
+                        )
+                        ordered_cols += [lbl, delta_col]
+                    else:
+                        ordered_cols += [lbl]
+                    prev_mk_s = mk
+                ordered_cols += ["Total"]
+                sv_pivot = sv_pivot[ordered_cols]
+                sv_pivot.index.name = "Service"
+
+                def css_svc_delta(v):
+                    if not isinstance(v,str) or v in ["–","new"]: return "color:#aaa"
+                    try:
+                        f=float(v.replace("%","").replace("+",""))
+                        return "color:#16A34A;font-weight:500" if f>0 else "color:#DC2626;font-weight:500" if f<0 else ""
+                    except: return ""
+                delta_cols_svc = [c for c in ordered_cols if c.endswith(" Δ")]
+                styled_svc = sv_pivot.style.map(css_svc_delta, subset=delta_cols_svc)
+                styled_svc = styled_svc.set_properties(**{"font-size":"11px"})
+                st.dataframe(styled_svc, use_container_width=True, height=400)
 
         # ── Demographics Breakdown ──────────────────────────────────────────
         dm1, dm2 = st.columns([1,2])
@@ -2198,63 +2240,28 @@ with tab_action:
     action_shops = action_shops[action_shops["alert_count"]>0].sort_values("health_score")
 
     # ── Filters row ──────────────────────────────────────────────────────────
-    f_col1, f_col2, f_col3 = st.columns([3, 2, 2])
+    f_col1, f_col2, f_col3 = st.columns(3)
 
     with f_col1:
-        st.markdown('<div class="section-title" style="margin-bottom:4px">Filter by AM</div>', unsafe_allow_html=True)
-        ams_with_issues = sorted(action_shops["kam"].unique())
-        cur_filter = st.session_state.get("action_am_filter","all")
-        am_btns = st.columns(min(len(ams_with_issues)+1, 6))
-        if am_btns[0].button("ทั้งหมด", key="af_all",
-                             type="primary" if cur_filter=="all" else "secondary",
-                             use_container_width=True):
-            st.session_state["action_am_filter"] = "all"; st.rerun()
-        for i, am_name in enumerate(ams_with_issues[:5]):
-            n = (action_shops["kam"]==am_name).sum()
-            if am_btns[i+1].button(f"{am_name}\n({n})", key=f"af_{am_name}",
-                                   type="primary" if cur_filter==am_name else "secondary",
-                                   use_container_width=True):
-                st.session_state["action_am_filter"] = am_name; st.rerun()
-        if len(ams_with_issues) > 5:
-            extra = st.selectbox("AM อื่นๆ", ["–"]+ams_with_issues[5:], key="af_extra", label_visibility="collapsed")
-            if extra != "–":
-                st.session_state["action_am_filter"] = extra; st.rerun()
+        ams_with_issues = ["ทั้งหมด"] + sorted(action_shops["kam"].unique())
+        cur_filter = st.selectbox("Filter by AM", ams_with_issues,
+                                   key="action_am_dd", label_visibility="visible")
 
     with f_col2:
-        st.markdown('<div class="section-title" style="margin-bottom:4px">Filter by GMV</div>', unsafe_allow_html=True)
-        max_gmv = int(action_shops["gmv"].max()) if len(action_shops) else 1000000
-        gmv_range = st.select_slider(
-            "GMV range",
-            options=["ทั้งหมด", "< ฿10K", "฿10K–50K", "฿50K–200K", "฿200K–1M", "> ฿1M"],
-            value="ทั้งหมด",
-            key="gmv_range_filter",
-            label_visibility="collapsed"
-        )
+        shop_opts = ["ทั้งหมด"] + sorted(action_shops["organization_name"].unique())
+        shop_filter = st.selectbox("Filter by Shop", shop_opts,
+                                    key="action_shop_dd", label_visibility="visible")
 
     with f_col3:
-        st.markdown('<div class="section-title" style="margin-bottom:4px">Sort by</div>', unsafe_allow_html=True)
-        sort_by = st.selectbox(
-            "Sort",
+        sort_by = st.selectbox("Sort by",
             ["Health score (ต่ำสุดก่อน)", "GMV (สูงสุดก่อน)", "GMV (ต่ำสุดก่อน)", "Alert count (มากสุดก่อน)"],
-            key="action_sort",
-            label_visibility="collapsed"
-        )
+            key="action_sort", label_visibility="visible")
 
-    # Apply AM filter
-    if cur_filter != "all":
+    # Apply filters
+    if cur_filter != "ทั้งหมด":
         action_shops = action_shops[action_shops["kam"]==cur_filter]
-
-    # Apply GMV filter
-    gmv_map = {
-        "< ฿10K":      (0,       10_000),
-        "฿10K–50K":   (10_000,  50_000),
-        "฿50K–200K":  (50_000,  200_000),
-        "฿200K–1M":   (200_000, 1_000_000),
-        "> ฿1M":       (1_000_000, 999_999_999),
-    }
-    if gmv_range != "ทั้งหมด" and gmv_range in gmv_map:
-        lo, hi = gmv_map[gmv_range]
-        action_shops = action_shops[(action_shops["gmv"] >= lo) & (action_shops["gmv"] < hi)]
+    if shop_filter != "ทั้งหมด":
+        action_shops = action_shops[action_shops["organization_name"]==shop_filter]
 
     # Apply sort
     sort_map = {
@@ -2266,11 +2273,26 @@ with tab_action:
     sc_col, sc_asc = sort_map.get(sort_by, ("health_score", True))
     action_shops = action_shops.sort_values(sc_col, ascending=sc_asc)
 
+    # ── Task summary for selected KAM ─────────────────────────────────────
+    if my_kam_id := st.session_state.get("my_kam_identity","–"):
+        if my_kam_id != "–":
+            all_c = all_comments_cache
+            pending_shops  = [sid for sid,cs in all_c.items() if cs and cs[-1]["status"]=="pending"]
+            inprog_shops   = [sid for sid,cs in all_c.items() if cs and cs[-1]["status"]=="in_progress"]
+            escalate_shops = [sid for sid,cs in all_c.items() if cs and cs[-1]["status"]=="escalate"]
+            done_shops     = [sid for sid,cs in all_c.items() if cs and cs[-1]["status"]=="done"]
+            if any([pending_shops, inprog_shops, escalate_shops, done_shops]):
+                st.markdown(f"""
+                <div style="background:#fff;border:1px solid #ebebeb;border-radius:8px;padding:10px 16px;margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+                  <div style="font-size:10px;font-weight:600;color:#bbb;text-transform:uppercase;letter-spacing:.07em">Task Summary — {my_kam_id}</div>
+                  <span style="font-size:11px;background:#FEF2F2;color:#DC2626;padding:3px 10px;border-radius:4px;font-weight:600">🔴 Pending {len(pending_shops)}</span>
+                  <span style="font-size:11px;background:#FFFBEB;color:#D97706;padding:3px 10px;border-radius:4px;font-weight:600">🟡 In Progress {len(inprog_shops)}</span>
+                  <span style="font-size:11px;background:#EFF6FF;color:#2563EB;padding:3px 10px;border-radius:4px;font-weight:600">⬆️ Escalate {len(escalate_shops)}</span>
+                  <span style="font-size:11px;background:#F0FDF4;color:#16A34A;padding:3px 10px;border-radius:4px;font-weight:600">✅ Done {len(done_shops)}</span>
+                </div>""", unsafe_allow_html=True)
+
     st.markdown(f'<div class="section-title">Action List — {len(action_shops)} ร้านที่ต้องดูแล</div>', unsafe_allow_html=True)
-    if gmv_range != "ทั้งหมด":
-        st.caption(f"กรอง: GMV {gmv_range} · เรียงตาม {sort_by}")
-    else:
-        st.caption(f"เรียงตาม {sort_by}")
+    st.caption(f"เรียงตาม {sort_by}")
 
     # ── Load all comments for this month ────────────────────────────────────
     all_comments_cache = load_all_comments_cached(sel_month)
