@@ -193,8 +193,13 @@ hr { border: none; border-top: 1px solid #ebebeb; margin: 1rem 0 }
 """, unsafe_allow_html=True)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-REAL_AMS = {"Amm","Aum","Chertam","Fah KAM","Geem","Get KAM",
-            "Mameaw","Nahm","Pui","Puinoon","Seeiw","Wan"}
+REAL_AMS = {
+    "Mameaw","Chertam","Geem","Wan","Pui","Fah KAM","Seeiw","Amm",
+    "UN","VPM","Nahm","Aum","THINEEKARN BD","Get KAM","Samir","Lanna",
+    "Temporarily closed","Puinoon","Permanently closed","Kittitut BD",
+    "Pym","Femille","Pop SSU","Amm Junior","End Contract ","Sasithorn BD",
+    "Peerawat Dangsupa","Amy","Muk BD","Phornphannarai","SSU","No owner","Invalid",
+}
 EXCLUDED  = {"cancelled","refunded","expired","no_show"}
 PILLAR_COLS  = ["sku_score","price_score","view_score","cvr_score"]
 PILLAR_NAMES = ["SKU Quality","Price","View MoM","CVR MoM"]
