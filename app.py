@@ -1104,13 +1104,23 @@ with tab_ov:
     # ── AM Scorecard cards with 6 metrics ──────────────────────────────────
     for _, r in am_src_ov.sort_values("avg_health").iterrows():
         am_shops = shops_src[shops_src["kam"]==r["kam"]] if ov_am_sel=="all" else shops_src
-        # Use AM summary data directly — accurate per-AM unique counts
-        cov           = ov_stats.get("coverage_pct", 100) / 100
+        # Use AM summary data — with fallback to shop-level for old data
+        cov = ov_stats.get("coverage_pct", 100) / 100
+
+        # Try AM summary fields (new format)
         unique_cust   = int(r.get("unique_customers", 0))
         new_cust      = int(r.get("new_customers", 0))
         basket_size   = int(r.get("basket_size", 0))
         avg_page_view = float(r.get("avg_page_view", 0))
         avg_cr        = float(r.get("avg_cr_pct", 0))
+
+        # Fallback for old data: compute from shop-level
+        if unique_cust == 0 and len(am_shops):
+            unique_cust = int(am_shops["unique_customers"].sum()) if "unique_customers" in am_shops.columns else 0
+            new_cust    = int(am_shops["new_customers"].sum())    if "new_customers"    in am_shops.columns else 0
+            basket_size = int(r["gmv"] / unique_cust) if unique_cust > 0 else 0
+            avg_page_view = float(am_shops["avg_view"].mean()) if "avg_view" in am_shops.columns else 0
+            avg_cr        = float(am_shops["avg_cr"].mean())   if "avg_cr"   in am_shops.columns else 0
 
         # Run rate (pro-rate by coverage for incomplete months)
         gmv_rr   = r["gmv"]       / cov if ov_is_rr and cov > 0 else r["gmv"]
