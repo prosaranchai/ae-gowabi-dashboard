@@ -554,13 +554,61 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         svc_all["gmv"]   = svc_all["gmv"].round(0).astype(int)
         svc_price_table  = svc_all[svc_all["pct"] > 0].sort_values("pct", ascending=False)
 
+        # Full service performance (all services, not just overpriced)
+        svc_perf = svc_all.copy()
+        svc_perf["basket"] = (svc_perf["gmv"] / svc_perf["orders"].replace(0,np.nan)).round(0).fillna(0).astype(int)
+
+        # Shop SKU concentration: % GMV from top-1 SKU per shop
+        shop_top_sku = svc_all.sort_values("gmv",ascending=False).groupby("shop_id_s").first().reset_index()[["shop_id_s","service_name","gmv"]]
+        shop_top_sku.columns = ["shop_id_s","top_sku","top_sku_gmv"]
+        agg2 = agg.merge(shop_top_sku, on="shop_id_s", how="left")
+        agg2["top_sku_pct"] = (agg2["top_sku_gmv"] / agg2["gmv"].replace(0,np.nan)*100).round(1).fillna(0)
+        # Category avg SKU
+        cat_avg_sku = agg.groupby("category")["sku_count"].mean().round(1).to_dict()
+        agg2["cat_avg_sku"] = agg2["category"].map(cat_avg_sku).round(1)
+        agg2["sku_gap"] = (agg2["cat_avg_sku"] - agg2["sku_count"]).round(1)
+
+        # Demographics breakdown
+        demo = {}
+        # Gender
+        if "gender" in mdf.columns:
+            g = mdf.groupby("gender")["gmv"].sum().reset_index()
+            g["gmv"] = g["gmv"].round(0).astype(int)
+            demo["gender"] = g.to_dict("records")
+        # Age groups
+        if "age" in mdf.columns:
+            mdf2 = mdf.copy()
+            mdf2["age"] = pd.to_numeric(mdf2["age"], errors="coerce")
+            mdf2["age_group"] = pd.cut(mdf2["age"],
+                bins=[0,24,34,44,54,200],
+                labels=["<25","25–34","35–44","45–54","55+"]
+            ).astype(str).replace("nan","Unknown")
+            ag = mdf2.groupby("age_group")["gmv"].sum().reset_index()
+            ag["gmv"] = ag["gmv"].round(0).astype(int)
+            demo["age"] = ag.to_dict("records")
+        # Payment type
+        if "payment_type" in mdf.columns:
+            pt = mdf.groupby("payment_type")["gmv"].sum().reset_index()
+            pt["gmv"] = pt["gmv"].round(0).astype(int)
+            demo["payment"] = pt.to_dict("records")
+        # Category
+        demo["category"] = cat[["category","gmv"]].to_dict("records")
+        # Subcategory (top 10 by GMV)
+        if "subcategory" in mdf.columns:
+            sc_df = mdf.groupby("subcategory")["gmv"].sum().nlargest(10).reset_index()
+            sc_df["gmv"] = sc_df["gmv"].round(0).astype(int)
+            demo["subcategory"] = sc_df.to_dict("records")
+
         result["months"][mkey] = {
-            "shops":       agg.to_dict("records"),
+            "shops":       agg2[list(agg.columns)+["top_sku","top_sku_pct","cat_avg_sku","sku_gap"]].to_dict("records"),
             "am":          am.to_dict("records"),
             "category":    cat.to_dict("records"),
             "stats":       monthly_stat,
+            "demo":        demo,
             "svc_price":   svc_price_table[["shop_id_s","organization_name","kam","category",
                                              "service_name","sell","low12","pct","gmv","orders"]].to_dict("records"),
+            "svc_perf":    svc_perf[["shop_id_s","organization_name","kam","category",
+                                      "service_name","gmv","orders","basket","sell","low12","pct"]].to_dict("records"),
         }
 
     # ── Cross-month trend: KAM ────────────────────────────────────────────
@@ -958,8 +1006,8 @@ st.caption(f'อัพโหลด {sel_info["upload_time"]} · {"จริง �
 
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab_ov, tab_gmv, tab_cat, tab_new, tab_health, tab_action, tab_upload = st.tabs([
-    "📊 Overview", "📈 GMV MoM", "🗂️ Category", "👥 New User", "🏪 Store Health", "⚡ Action List", "📤 Upload"
+tab_ov, tab_gmv, tab_cat, tab_new, tab_health, tab_action, tab_sku, tab_upload = st.tabs([
+    "📊 Overview", "📈 GMV MoM", "🗂️ Category", "👥 New User", "🏪 Store Health", "⚡ Action List", "🔬 SKU Analysis", "📤 Upload"
 ])
 
 
@@ -1433,36 +1481,80 @@ with tab_gmv:
                                              all_shop_names, default=[], key="gmv_shop",
                                              placeholder="เลือกร้านที่ต้องการ…")
 
-        # Build monthly summary across all months
-        all_months  = sorted(idx_now.keys())
-        all_labels  = [idx_now[m]["label"] for m in all_months]
-        all_gmv     = [idx_now[m]["stats"]["gmv"] for m in all_months]
-        all_rr_gmv  = [idx_now[m]["stats"]["gmv_run_rate"] for m in all_months]
+        # Build monthly summary — filter by KAM if selected
+        all_months = sorted(idx_now.keys())
+        all_labels = [idx_now[m]["label"] for m in all_months]
+
+        # Build per-month GMV respecting both KAM and Shop filters
+        if gmv_shop_filt:
+            # Shop filter: sum GMV per month from shop trend data
+            shop_gmv_by_month = {}
+            for row in trend_shop.to_dict("records"):
+                if row["organization_name"] in gmv_shop_filt:
+                    mk = row["month"]
+                    shop_gmv_by_month[mk] = shop_gmv_by_month.get(mk, 0) + row["gmv"]
+            all_gmv    = [shop_gmv_by_month.get(m, 0) for m in all_months]
+            cov_map    = {m: idx_now[m]["stats"].get("coverage_pct",100)/100 for m in all_months}
+            all_rr_gmv = [
+                int(v / max(cov_map[m], 0.01)) if not idx_now[m]["stats"].get("is_complete",True) else v
+                for m,v in zip(all_months, all_gmv)
+            ]
+            shop_names = ", ".join(gmv_shop_filt[:2]) + ("…" if len(gmv_shop_filt)>2 else "")
+            gmv_title  = f"GMV — {shop_names} รายเดือน (฿M)"
+        elif gmv_am_filt != "ทั้งหมด" and len(trend_kam):
+            # KAM filter only
+            km_filt = trend_kam[trend_kam["kam"]==gmv_am_filt]
+            km_map  = km_filt.set_index("month")["gmv"].to_dict()
+            all_gmv    = [km_map.get(m, 0) for m in all_months]
+            all_rr_gmv = [
+                int(km_map.get(m,0) / max(idx_now[m]["stats"].get("coverage_pct",100)/100, 0.01))
+                if not idx_now[m]["stats"].get("is_complete", True) else km_map.get(m,0)
+                for m in all_months
+            ]
+            gmv_title = f"GMV {gmv_am_filt} รายเดือน (฿M)"
+        else:
+            all_gmv    = [idx_now[m]["stats"]["gmv"] for m in all_months]
+            all_rr_gmv = [idx_now[m]["stats"]["gmv_run_rate"] for m in all_months]
+            gmv_title  = "GMV รายเดือน (฿M)"
 
         col1,col2 = st.columns(2)
         with col1:
-            st.markdown('<div class="section-title">GMV รายเดือน (฿M)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="section-title">{gmv_title}</div>', unsafe_allow_html=True)
             st.bar_chart(pd.DataFrame({"GMV":[v/1e6 for v in all_gmv]}, index=all_labels),
                          use_container_width=True, height=180)
         with col2:
             st.markdown('<div class="section-title">MoM Table</div>', unsafe_allow_html=True)
             mom_rows = []
             for i,(m,label) in enumerate(zip(all_months, all_labels)):
-                info = idx_now[m]["stats"]
-                gmv  = info["gmv"]; rr = info["gmv_run_rate"]
-                prev = idx_now[all_months[i-1]]["stats"]["gmv"] if i>0 else None
+                gmv  = all_gmv[i]
+                rr   = all_rr_gmv[i]
+                prev = all_gmv[i-1] if i>0 else None
+                is_inc = not idx_now[m]["stats"].get("is_complete", True)
                 mom  = f"{(gmv-prev)/prev*100:+.1f}%" if prev else "–"
-                mom_rows.append({"Month":label,"GMV":fmt_gmv(gmv),
-                                 "Run Rate":f"฿{rr/1e6:.1f}M" if not info.get("is_complete") else "–","MoM":mom})
-            st.dataframe(pd.DataFrame(mom_rows), hide_index=True, use_container_width=True)
+                mom_rows.append({
+                    "Month":    label,
+                    "GMV":      fmt_gmv(gmv),
+                    "Run Rate": fmt_gmv(rr) if is_inc else "–",
+                    "MoM":      mom,
+                })
+            tbl_mom = pd.DataFrame(mom_rows)
+            def css_mom(v):
+                if not isinstance(v,str) or v=="–": return ""
+                try:
+                    f=float(v.replace("+","").replace("%",""))
+                    return "color:#16A34A;font-weight:600" if f>0 else "color:#DC2626;font-weight:600" if f<0 else ""
+                except: return ""
+            st.dataframe(tbl_mom.style.map(css_mom, subset=["MoM"]),
+                         hide_index=True, use_container_width=True)
 
-        # GMV by AM trend (filtered)
-        st.markdown('<div class="section-title">GMV by AM รายเดือน (฿M)</div>', unsafe_allow_html=True)
-        if len(trend_kam):
-            km = trend_kam.copy()
-            if gmv_am_filt != "ทั้งหมด": km = km[km["kam"]==gmv_am_filt]
-            km_pivot = km.pivot(index="month", columns="kam", values="gmv").fillna(0) / 1e6
-            st.line_chart(km_pivot, use_container_width=True, height=200)
+        # GMV trend line (hide when shop-filtered, not meaningful)
+        if not gmv_shop_filt:
+            st.markdown('<div class="section-title">GMV by AM รายเดือน (฿M)</div>', unsafe_allow_html=True)
+            if len(trend_kam):
+                km = trend_kam.copy()
+                if gmv_am_filt != "ทั้งหมด": km = km[km["kam"]==gmv_am_filt]
+                km_pivot = km.pivot(index="month", columns="kam", values="gmv").fillna(0) / 1e6
+                st.line_chart(km_pivot, use_container_width=True, height=200)
 
         col3,col4 = st.columns(2)
         with col3:
@@ -1559,6 +1651,107 @@ with tab_gmv:
                 sv["gmv"] = (sv["gmv"]/1e3).round(0)
                 sv.columns = ["Service","GMV (฿K)"]
                 st.dataframe(sv, hide_index=True, use_container_width=True, height=320)
+
+        # ── Demographics Breakdown ──────────────────────────────────────────
+        st.markdown('<div class="section-title">Demographics & Mix — ' + sel_info["label"] + '</div>', unsafe_allow_html=True)
+        demo_data = mdata.get("demo", {}) if mdata else {}
+
+        if not demo_data:
+            st.info("Re-upload ข้อมูลเพื่อดู demographics ครับ")
+        else:
+            import json as _json
+
+            def pie_html(title, rows, label_key, value_key, colors=None):
+                """Build a simple SVG donut chart."""
+                total = sum(r[value_key] for r in rows if r.get(value_key,0)>0)
+                if total == 0: return f'<div style="color:#aaa;font-size:11px">ไม่มีข้อมูล</div>'
+                default_colors = ["#3B8BD4","#E24B4A","#3a7d2c","#c47c10","#9b59b6","#e67e22","#1abc9c","#e91e63","#00bcd4","#8bc34a"]
+                rows_sorted = sorted(rows, key=lambda x: x.get(value_key,0), reverse=True)
+
+                # Build SVG donut
+                cx,cy,r,ri = 80,80,60,36
+                import math
+                angle = -math.pi/2
+                paths = []
+                for i,row in enumerate(rows_sorted):
+                    v = row.get(value_key,0)
+                    if v <= 0: continue
+                    sweep = (v/total)*2*math.pi
+                    x1,y1 = cx+r*math.cos(angle), cy+r*math.sin(angle)
+                    x2,y2 = cx+r*math.cos(angle+sweep), cy+r*math.sin(angle+sweep)
+                    xi1,yi1 = cx+ri*math.cos(angle), cy+ri*math.sin(angle)
+                    xi2,yi2 = cx+ri*math.cos(angle+sweep), cy+ri*math.sin(angle+sweep)
+                    large = 1 if sweep > math.pi else 0
+                    col = (colors or default_colors)[i % len(default_colors)]
+                    pct = v/total*100
+                    paths.append(f'<path d="M{x1:.1f},{y1:.1f} A{r},{r} 0 {large},1 {x2:.1f},{y2:.1f} L{xi2:.1f},{yi2:.1f} A{ri},{ri} 0 {large},0 {xi1:.1f},{yi1:.1f} Z" fill="{col}" opacity="0.9"><title>{row[label_key]}: {pct:.1f}% ({fmt_gmv(v)})</title></path>')
+                    angle += sweep
+
+                svg = f'''<svg width="160" height="160" viewBox="0 0 160 160">
+                  <text x="80" y="76" text-anchor="middle" font-size="11" fill="#888">GMV</text>
+                  <text x="80" y="90" text-anchor="middle" font-size="12" font-weight="600" fill="#1a1a1a">{fmt_gmv(total)}</text>
+                  {"".join(paths)}
+                </svg>'''
+
+                # Legend
+                legend = "".join([
+                    f'<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">'
+                    f'<div style="width:8px;height:8px;border-radius:2px;background:{(colors or default_colors)[i%len(default_colors)]};flex-shrink:0"></div>'
+                    f'<div style="font-size:10px;color:#444;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{row[label_key]}</div>'
+                    f'<div style="font-size:10px;color:#888;font-weight:500">{row.get(value_key,0)/total*100:.0f}%</div>'
+                    f'</div>'
+                    for i,row in enumerate(rows_sorted[:8]) if row.get(value_key,0)>0
+                ])
+
+                return f'''<div style="background:#fff;border:1px solid #ebebeb;border-radius:8px;padding:12px 14px">
+                  <div style="font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#bbb;margin-bottom:8px">{title}</div>
+                  <div style="display:flex;align-items:flex-start;gap:10px">
+                    {svg}
+                    <div style="flex:1;padding-top:4px">{legend}</div>
+                  </div>
+                </div>'''
+
+            # Row 1: Gender + Age
+            d1c1, d1c2 = st.columns(2)
+            with d1c1:
+                if "gender" in demo_data:
+                    st.markdown(pie_html("Gender", demo_data["gender"], "gender", "gmv",
+                                        ["#3B8BD4","#E24B4A","#aaa"]), unsafe_allow_html=True)
+            with d1c2:
+                if "age" in demo_data:
+                    age_rows = [r for r in demo_data["age"] if r["age_group"] not in ["nan","Unknown","None"] and r["gmv"]>0]
+                    age_order = ["<25","25–34","35–44","45–54","55+"]
+                    age_rows  = sorted(age_rows, key=lambda x: age_order.index(x["age_group"]) if x["age_group"] in age_order else 99)
+                    st.markdown(pie_html("Age Group", age_rows, "age_group", "gmv",
+                                        ["#1abc9c","#3B8BD4","#9b59b6","#c47c10","#E24B4A"]), unsafe_allow_html=True)
+
+            # Row 2: Payment + Category
+            d2c1, d2c2 = st.columns(2)
+            with d2c1:
+                if "payment" in demo_data:
+                    # Clean payment type labels
+                    pay_clean = []
+                    label_map = {"pay_online":"Online","gbprimepay":"GBPrimePay","shopeepay":"ShopeePay",
+                                 "line_pay":"LINE Pay","bank_transfer":"Bank Transfer",
+                                 "true_money_2":"TrueMoney","googlepay":"Google Pay",
+                                 "alipay_cn":"Alipay","applepay":"Apple Pay","promptpay":"PromptPay"}
+                    for r in demo_data["payment"]:
+                        pay_clean.append({"payment":label_map.get(r["payment_type"],r["payment_type"]),"gmv":r["gmv"]})
+                    st.markdown(pie_html("Payment Type", pay_clean, "payment", "gmv"), unsafe_allow_html=True)
+            with d2c2:
+                if "category" in demo_data:
+                    st.markdown(pie_html("Category", demo_data["category"], "category", "gmv"), unsafe_allow_html=True)
+
+            # Row 3: Subcategory (full width)
+            if "subcategory" in demo_data:
+                st.markdown('<div class="section-title" style="margin-top:8px">Top Subcategories</div>', unsafe_allow_html=True)
+                sub_rows = demo_data["subcategory"]
+                total_sub = sum(r["gmv"] for r in sub_rows)
+                sub_tbl   = pd.DataFrame(sub_rows).sort_values("gmv",ascending=False)
+                sub_tbl["GMV"]   = sub_tbl["gmv"].apply(fmt_gmv)
+                sub_tbl["Share"] = (sub_tbl["gmv"]/total_sub*100).round(1).apply(lambda x: f"{x:.1f}%")
+                sub_tbl = sub_tbl[["subcategory","GMV","Share"]].rename(columns={"subcategory":"Subcategory"})
+                st.dataframe(sub_tbl, hide_index=True, use_container_width=True, height=280)
 
 
 # ══ TAB 2: Category ════════════════════════════════════════════════════════════
@@ -1963,7 +2156,142 @@ with tab_action:
     st.download_button("⬇ action_list.csv", to_csv(action_shops[["organization_name","kam","category","health_score","priority","alert_count","alerts"]]), f"action_list_{sel_month}.csv","text/csv")
 
 
-# ══ TAB 6: Upload ════════════════════════════════════════════════════════════
+# ══ TAB 6: SKU Analysis ══════════════════════════════════════════════════════
+with tab_sku:
+    sku_mdata = load_month_data(sel_month)
+    svc_perf_data = sku_mdata.get("svc_perf", []) if sku_mdata else []
+    shops_sku     = pd.DataFrame(sku_mdata.get("shops", [])) if sku_mdata else pd.DataFrame()
+
+    # Filters
+    sk1, sk2, sk3 = st.columns(3)
+    sku_am_filt  = sk1.selectbox("KAM",      ["ทั้งหมด"]+sorted(REAL_AMS), key="sku_am")
+    all_cats_sku = sorted(set(s.get("category","") for s in svc_perf_data) - {""})
+    sku_cat_filt = sk2.selectbox("Category", ["ทั้งหมด"]+all_cats_sku, key="sku_cat")
+    sku_search   = sk3.text_input("ค้นหาร้าน / service", placeholder="…", key="sku_search")
+
+    if not svc_perf_data:
+        st.info("Re-upload ข้อมูลเพื่อใช้ SKU Analysis ครับ")
+    else:
+        sdf = pd.DataFrame(svc_perf_data)
+        if sku_am_filt  != "ทั้งหมด": sdf = sdf[sdf["kam"]==sku_am_filt]
+        if sku_cat_filt != "ทั้งหมด": sdf = sdf[sdf["category"]==sku_cat_filt]
+        if sku_search:
+            q = sku_search.lower()
+            sdf = sdf[sdf["organization_name"].str.lower().str.contains(q) |
+                      sdf["service_name"].str.lower().str.contains(q)]
+
+        # ── Section 1: Top/Bottom Services ───────────────────────────────────
+        st.markdown('<div class="section-title">Top / Bottom Services</div>', unsafe_allow_html=True)
+        s1c1, s1c2 = st.columns(2)
+
+        with s1c1:
+            st.caption("🏆 Top 20 Services — GMV")
+            top_svc = sdf.groupby("service_name").agg(gmv=("gmv","sum"), orders=("orders","sum"),
+                shops=("shop_id_s","nunique"), basket=("basket","mean")).reset_index()
+            top_svc = top_svc.nlargest(20,"gmv").copy()
+            top_svc["gmv"]    = top_svc["gmv"].apply(fmt_gmv)
+            top_svc["basket"] = top_svc["basket"].apply(lambda x: f"฿{x:,.0f}")
+            top_svc.columns   = ["Service","GMV","Orders","Shops","Avg Basket"]
+            st.dataframe(top_svc, hide_index=True, use_container_width=True, height=340)
+
+        with s1c2:
+            st.caption("📉 Bottom 20 Services — GMV (ขายน้อย แต่มี listing)")
+            bot_svc = sdf[sdf["orders"]>0].groupby("service_name").agg(
+                gmv=("gmv","sum"), orders=("orders","sum"), shops=("shop_id_s","nunique")).reset_index()
+            bot_svc = bot_svc.nsmallest(20,"gmv").copy()
+            bot_svc["gmv"] = bot_svc["gmv"].apply(fmt_gmv)
+            bot_svc.columns = ["Service","GMV","Orders","Shops"]
+            st.dataframe(bot_svc, hide_index=True, use_container_width=True, height=340)
+
+        # ── Section 2: Price Analysis ─────────────────────────────────────────
+        st.markdown('<div class="section-title">Price Analysis</div>', unsafe_allow_html=True)
+        p1, p2, p3 = st.columns(3)
+        total_svc = len(sdf)
+        over30 = (sdf["pct"] > 30).sum()
+        over15 = ((sdf["pct"] > 15) & (sdf["pct"] <= 30)).sum()
+        fair   = (sdf["pct"].between(-5, 15)).sum()
+        under  = (sdf["pct"] < -5).sum()
+        p1.metric("แพงกว่า lowest >30%", f"{over30:,}", f"{over30/total_svc*100:.0f}% of services")
+        p2.metric("แพงกว่า 15–30%",      f"{over15:,}", f"{over15/total_svc*100:.0f}% of services")
+        p3.metric("ราคาดี (±15%)",       f"{fair:,}",   f"{fair/total_svc*100:.0f}% of services")
+
+        st.caption("Services ที่ราคาสูงกว่า lowest 12m มากที่สุด (Top 30)")
+        price_top = sdf[sdf["pct"]>0].nlargest(30,"pct")[
+            ["service_name","organization_name","kam","category","sell","low12","pct","gmv","orders"]].copy()
+        price_top["sell"]  = price_top["sell"].apply(lambda x: f"฿{x:,.0f}")
+        price_top["low12"] = price_top["low12"].apply(lambda x: f"฿{x:,.0f}")
+        price_top["pct"]   = price_top["pct"].apply(lambda x: f"+{x:.0f}%")
+        price_top["gmv"]   = price_top["gmv"].apply(fmt_gmv)
+        price_top.columns  = ["Service","Shop","AM","Category","Selling","Lowest 12m","Above%","GMV","Orders"]
+
+        def css_above2(v):
+            if not isinstance(v,str): return ""
+            try:
+                f = float(v.replace("+","").replace("%",""))
+                return "color:#DC2626;font-weight:600" if f>=30 else "color:#D97706;font-weight:500" if f>=15 else ""
+            except: return ""
+        st.dataframe(price_top.style.map(css_above2, subset=["Above%"]).set_properties(**{"font-size":"11px"}),
+                     hide_index=True, use_container_width=True, height=320)
+
+        # ── Section 3: SKU Gap Analysis ───────────────────────────────────────
+        st.markdown('<div class="section-title">SKU Gap — ร้านที่มี SKU น้อยกว่า Category Average</div>', unsafe_allow_html=True)
+        if len(shops_sku):
+            sks = shops_sku.copy()
+            if sku_am_filt  != "ทั้งหมด": sks = sks[sks["kam"]==sku_am_filt]
+            if sku_cat_filt != "ทั้งหมด": sks = sks[sks["category"]==sku_cat_filt]
+            if sku_search:   sks = sks[sks["organization_name"].str.lower().str.contains(sku_search.lower(),na=False)]
+
+            gap_df = sks[sks.get("sku_gap", pd.Series(dtype=float)).fillna(0) > 0 if "sku_gap" in sks.columns else sks["sku_score"]<50].copy() if "sku_gap" in sks.columns else sks[sks["sku_score"]<50].copy()
+            if "sku_gap" in gap_df.columns:
+                gap_df = gap_df.sort_values("sku_gap", ascending=False)
+                show_cols = ["organization_name","kam","category","sku_count","cat_avg_sku","sku_gap","gmv"]
+                avail = [c for c in show_cols if c in gap_df.columns]
+                gap_tbl = gap_df[avail].copy()
+                gap_tbl["gmv"] = gap_tbl["gmv"].apply(fmt_gmv)
+                rename_map = {"organization_name":"Shop","kam":"AM","category":"Category",
+                              "sku_count":"SKUs","cat_avg_sku":"Cat Avg","sku_gap":"Gap","gmv":"GMV"}
+                gap_tbl = gap_tbl.rename(columns=rename_map)
+                def css_gap(v):
+                    try: return "color:#D97706;font-weight:500" if float(v)>5 else "color:#F59E0B" if float(v)>2 else ""
+                    except: return ""
+                st.dataframe(gap_tbl.style.map(css_gap, subset=["Gap"]).set_properties(**{"font-size":"11px"}),
+                             hide_index=True, use_container_width=True, height=320)
+            else:
+                st.info("Re-upload เพื่อดู SKU gap ครับ")
+
+        # ── Section 4: Concentration Risk ─────────────────────────────────────
+        st.markdown('<div class="section-title">SKU Concentration Risk — ร้านที่พึ่งพา SKU เดียวสูง</div>', unsafe_allow_html=True)
+        if len(shops_sku) and "top_sku_pct" in shops_sku.columns:
+            sks2 = shops_sku.copy()
+            if sku_am_filt  != "ทั้งหมด": sks2 = sks2[sks2["kam"]==sku_am_filt]
+            if sku_cat_filt != "ทั้งหมด": sks2 = sks2[sks2["category"]==sku_cat_filt]
+            risk = sks2[sks2["top_sku_pct"]>=70].sort_values("top_sku_pct", ascending=False)
+            r_cols = ["organization_name","kam","category","gmv","sku_count","top_sku","top_sku_pct"]
+            avail2 = [c for c in r_cols if c in risk.columns]
+            risk_tbl = risk[avail2].copy()
+            risk_tbl["gmv"] = risk_tbl["gmv"].apply(fmt_gmv)
+            risk_tbl["top_sku_pct"] = risk_tbl["top_sku_pct"].apply(lambda x: f"{x:.0f}%")
+            rename2 = {"organization_name":"Shop","kam":"AM","category":"Category","gmv":"GMV",
+                       "sku_count":"SKUs","top_sku":"Top SKU","top_sku_pct":"Top SKU GMV%"}
+            risk_tbl = risk_tbl.rename(columns=rename2)
+            def css_conc(v):
+                if not isinstance(v,str): return ""
+                try:
+                    f = float(v.replace("%",""))
+                    return "color:#DC2626;font-weight:700" if f>=90 else "color:#D97706;font-weight:500" if f>=70 else ""
+                except: return ""
+            st.dataframe(risk_tbl.style.map(css_conc, subset=["Top SKU GMV%"]).set_properties(**{"font-size":"11px"}),
+                         hide_index=True, use_container_width=True, height=320)
+            n90 = (sks2["top_sku_pct"]>=90).sum()
+            n70 = ((sks2["top_sku_pct"]>=70)&(sks2["top_sku_pct"]<90)).sum()
+            st.caption(f"🔴 {n90} ร้านที่ top SKU มี GMV >90%  ·  🟡 {n70} ร้านที่ 70–90%")
+
+            st.download_button("⬇ sku_concentration.csv", to_csv(risk[avail2]),
+                               f"sku_concentration_{sel_month}.csv", "text/csv")
+        else:
+            st.info("Re-upload เพื่อดู SKU concentration ครับ")
+
+# ══ TAB 7: Upload ════════════════════════════════════════════════════════════
 with tab_upload:
     st.markdown("### 📤 Upload ข้อมูลใหม่")
 
