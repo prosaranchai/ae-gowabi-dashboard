@@ -1116,18 +1116,12 @@ with tab_ov:
         avg_page_view = float(r.get("avg_page_view", 0))
         avg_cr        = float(r.get("avg_cr_pct", 0))
 
-        # Fallback for old data: use avg from shop-level
-        if am_orders == 0 and len(am_shops):
-            am_orders   = int(am_shops["total_orders"].sum())  if "total_orders"   in am_shops.columns else 0
-            new_cust    = int(am_shops["new_customers"].sum())  if "new_customers"  in am_shops.columns else 0
-            basket_size = int(r["gmv"] / am_orders) if am_orders > 0 else 0
-        if avg_page_view == 0 and len(am_shops):
-            avg_page_view = float(am_shops["avg_view"].mean()) if "avg_view" in am_shops.columns else 0
-            avg_cr        = float(am_shops["avg_cr"].mean())   if "avg_cr"   in am_shops.columns else 0
-
         # Run rate
-        am_orders_rr  = am_orders    / cov if ov_is_rr and cov > 0 else am_orders
-        view_rr       = avg_page_view / cov if ov_is_rr and cov > 0 else avg_page_view
+        am_orders_rr  = am_orders    / cov if ov_is_rr and cov > 0 and am_orders > 0 else am_orders
+        view_rr       = avg_page_view / cov if ov_is_rr and cov > 0 and avg_page_view > 0 else avg_page_view
+
+        # Old data flag — show "–" for fields not in old AM summary
+        _old_data = am_orders == 0 and new_cust == 0
 
         # Run rate (pro-rate by coverage for incomplete months)
         gmv_rr   = r["gmv"] / cov if ov_is_rr and cov > 0 else r["gmv"]
@@ -1155,11 +1149,19 @@ with tab_ov:
             )
 
         c_gmv    = mk_cell("GMV",        fmt_gmv(r["gmv"]),         rr_val=gmv_rr,   prev_val=p_gmv  or None)
-        c_ord    = mk_cell("Orders",      f"{am_orders:,}",      rr_val=am_orders_rr, prev_val=p_ord or None)
-        c_basket = mk_cell("Basket Size", f"฿{basket_size:,}")
-        c_new    = mk_cell("New User",    f"{new_cust:,}")
-        c_view   = mk_cell("Shop View",   f"{avg_page_view:,.0f}", rr_val=view_rr, prev_val=p_view or None)
-        c_cvr    = mk_cell("CVR",         f"{avg_cr:.2f}%",        color=sc(r["avg_cvr"]))
+        if _old_data:
+            c_ord    = mk_cell("Orders",      "–  (re-upload)", color="#bbb")
+            c_basket = mk_cell("Basket Size", "–")
+            c_new    = mk_cell("New User",    "–")
+            c_view   = mk_cell("Shop View",   f"{avg_page_view:,.0f}" if avg_page_view else "–",
+                               rr_val=view_rr if avg_page_view else None, prev_val=p_view or None)
+            c_cvr    = mk_cell("CVR",         f"{avg_cr:.2f}%" if avg_cr else "–", color=sc(r["avg_cvr"]) if avg_cr else "#bbb")
+        else:
+            c_ord    = mk_cell("Orders",      f"{am_orders:,}",        rr_val=am_orders_rr, prev_val=p_ord or None)
+            c_basket = mk_cell("Basket Size", f"฿{basket_size:,}")
+            c_new    = mk_cell("New User",    f"{new_cust:,}")
+            c_view   = mk_cell("Shop View",   f"{avg_page_view:,.0f}", rr_val=view_rr, prev_val=p_view or None)
+            c_cvr    = mk_cell("CVR",         f"{avg_cr:.2f}%",        color=sc(r["avg_cvr"]))
 
         cells_html = c_gmv + c_ord + c_basket + c_new + c_view + c_cvr
 
