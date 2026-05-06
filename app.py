@@ -411,7 +411,7 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
             cur_view_for_month = view_map_by_month.get(mkey, {})
             if cur_view_for_month:
                 agg["avg_view"] = agg["shop_id_s"].map(lambda x: cur_view_for_month.get(x,{}).get("view",0)).fillna(0)
-                agg["avg_cr"]   = (agg["shop_id_s"].map(lambda x: cur_view_for_month.get(x,{}).get("cr",0)) * 100).fillna(0)
+                agg["avg_cr"]   = agg["shop_id_s"].map(lambda x: cur_view_for_month.get(x,{}).get("cr",0)).fillna(0)
             elif view_map:
                 agg["avg_view"] = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_view",0)).fillna(0)
                 agg["avg_cr"]   = agg["shop_id_s"].map(lambda x: view_map.get(x,{}).get("avg_cr",0)).fillna(0)
