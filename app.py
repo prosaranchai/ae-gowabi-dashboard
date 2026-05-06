@@ -1237,6 +1237,55 @@ with tab_ov:
         )
         st.markdown(card_html, unsafe_allow_html=True)
 
+        # ── Shop drill-down for this AM ──────────────────────────────────────
+        kam_key = f"expand_am_{r['kam'].replace(' ','_')}"
+        is_expanded = st.session_state.get(kam_key, False)
+
+        btn_lbl = f"▲ ซ่อนร้านทั้งหมด" if is_expanded else f"▼ ดูร้านทั้งหมด {int(r['shops'])} ร้าน"
+        if st.button(btn_lbl, key=f"btn_{kam_key}", use_container_width=True):
+            st.session_state[kam_key] = not is_expanded
+            st.rerun()
+
+        if is_expanded:
+            am_shops_drill = shops_src[shops_src["kam"] == r["kam"]].copy() if ov_am_sel == "ทั้งหมด" else shops_src.copy()
+            am_shops_drill = am_shops_drill.sort_values("health_score")
+
+            drill_cols = {
+                "organization_name":"Shop","category":"Category",
+                "total_orders":"Orders","gmv":"GMV","health_score":"Health",
+                "sku_score":"SKU","price_score":"Price",
+                "view_score":"View","cvr_score":"CVR","priority":"Priority","alerts":"Alerts"
+            }
+            avail = [c for c in drill_cols if c in am_shops_drill.columns]
+            tbl   = am_shops_drill[avail].rename(columns=drill_cols).copy()
+            tbl["GMV"]    = tbl["GMV"].apply(fmt_gmv)
+            tbl["Health"] = tbl["Health"].apply(lambda x: f"{x:.1f}")
+            for sc_col in ["SKU","Price","View","CVR"]:
+                if sc_col in tbl.columns:
+                    tbl[sc_col] = tbl[sc_col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "–")
+
+            def _css(v):
+                try: return f"color:{sc(float(v))};font-weight:500"
+                except: return ""
+            def _cprio(v):
+                return {"critical":"background:#FEF2F2;color:#DC2626",
+                        "warning":"background:#FFFBEB;color:#D97706",
+                        "healthy":"background:#F0FDF4;color:#16A34A"}.get(str(v),"")
+
+            sc_cols = [c for c in ["Health","SKU","Price","View","CVR"] if c in tbl.columns]
+            styled  = tbl.style.map(_css, subset=sc_cols).map(_cprio, subset=["Priority"])
+            styled  = styled.set_properties(**{"font-size":"11px"})
+
+            st.dataframe(styled, use_container_width=True,
+                         height=min(520, 44 + len(tbl)*35))
+            st.download_button(
+                f"⬇ {r['kam']}_shops.csv",
+                to_csv(am_shops_drill[avail]),
+                f"{r['kam'].replace(' ','_')}_{ov_mk}.csv",
+                "text/csv", key=f"dl_{kam_key}"
+            )
+            st.markdown("---")
+
     # ── Pillar scores — clickable drill-down ────────────────────────────────
     st.markdown('<div class="section-title">4 Pillar Scores — คลิกเพื่อดูร้านที่ต้องแก้</div>', unsafe_allow_html=True)
 
