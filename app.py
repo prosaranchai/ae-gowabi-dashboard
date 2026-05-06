@@ -2816,6 +2816,8 @@ with tab_portfolio:
 </div>""", unsafe_allow_html=True)
 
                 # ── Header ────────────────────────────────────────────────────
+                _pf_cur_g  = float(cur_am["gmv"].sum())
+                _pf_prev_g = float(prev_am["gmv"].sum())
                 st.markdown(f"""
 <div style="background:#fff;border:1px solid #e8e8e8;border-radius:10px;padding:16px 20px;margin-bottom:16px">
   <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2825,12 +2827,9 @@ with tab_portfolio:
     </div>
     <div style="text-align:right">
       <div style="font-size:11px;color:#aaa;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Portfolio GMV</div>
-      {(lambda cur_g, prev_g, cov, is_inc:
-          f'<div style="font-size:22px;font-weight:700">{fmt_gmv(cur_g)}</div>' +
-          (f'<div style="font-size:10px;color:#2563EB;font-weight:500">RR {fmt_gmv(cur_g/cov)}</div>' if is_inc else "") +
-          f'<div style="font-size:11px">{arrow_pct((cur_g/cov - prev_g)/(prev_g)*100 if is_inc and prev_g>0 else (cur_g-prev_g)/prev_g*100 if prev_g>0 else None)} vs {pf_prev_lbl}</div>'
-      )(cur_am["gmv"].sum(), prev_am["gmv"].sum(),
-        pf_cov, pf_is_rr)}
+      <div style="font-size:22px;font-weight:700">{fmt_gmv(_pf_cur_g)}</div>
+      {f'<div style="font-size:10px;color:#2563EB;font-weight:500">RR {fmt_gmv(_pf_cur_g/pf_cov)}</div>' if pf_is_rr else ""}
+      <div style="font-size:11px">{arrow_pct((_pf_cur_g/pf_cov-_pf_prev_g)/_pf_prev_g*100 if pf_is_rr and _pf_prev_g>0 else (_pf_cur_g-_pf_prev_g)/_pf_prev_g*100 if _pf_prev_g>0 else None)} vs {pf_prev_lbl}</div>
     </div>
   </div>
 </div>""", unsafe_allow_html=True)
