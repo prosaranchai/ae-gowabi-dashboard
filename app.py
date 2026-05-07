@@ -1635,8 +1635,10 @@ with tab_ov:
                                 # Insert prev + MoM after Views/mo
                                 if "Views/mo" in tbl_drill.columns:
                                     insert_pos = list(tbl_drill.columns).index("Views/mo") + 1
-                                    tbl_drill.insert(insert_pos,     prev_lbl_drill, prev_col_vals)
-                                    tbl_drill.insert(insert_pos + 1, "MoM%",         mom_vals)
+                                    if prev_lbl_drill not in tbl_drill.columns:
+                                        tbl_drill.insert(insert_pos, prev_lbl_drill, prev_col_vals)
+                                    if "MoM%" not in tbl_drill.columns:
+                                        tbl_drill.insert(list(tbl_drill.columns).index(prev_lbl_drill)+1, "MoM%", mom_vals)
                                 else:
                                     tbl_drill[prev_lbl_drill] = prev_col_vals
                                     tbl_drill["MoM%"]         = mom_vals
@@ -1661,8 +1663,10 @@ with tab_ov:
 
                                 if "CR%" in tbl_drill.columns:
                                     insert_pos = list(tbl_drill.columns).index("CR%") + 1
-                                    tbl_drill.insert(insert_pos,     prev_lbl_drill, prev_cr_vals)
-                                    tbl_drill.insert(insert_pos + 1, "MoM%",         mom_cr_vals)
+                                    if prev_lbl_drill not in tbl_drill.columns:
+                                        tbl_drill.insert(insert_pos, prev_lbl_drill, prev_cr_vals)
+                                    if "MoM%" not in tbl_drill.columns:
+                                        tbl_drill.insert(list(tbl_drill.columns).index(prev_lbl_drill)+1, "MoM%", mom_cr_vals)
                                 else:
                                     tbl_drill[prev_lbl_drill] = prev_cr_vals
                                     tbl_drill["MoM%"]         = mom_cr_vals
