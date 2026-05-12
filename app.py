@@ -2925,37 +2925,63 @@ with tab_portfolio:
                     new_svcs = [s for s in skus if s["is_new"] and s["c_gmv"] > 0]
 
                     def svc_row(s, show_sign=True):
-                        name  = s["svc"][:38] + ("…" if len(s["svc"])>38 else "")
-                        gd    = s["c_gmv"] - s["p_gmv"]
-                        pd_   = s["c_sell"] - s["p_sell"]
-                        g_col = "#16A34A" if gd >= 0 else "#DC2626"
-                        g_sym = "▲" if gd >= 0 else "▼"
-                        g_str = f"{g_sym}฿{abs(int(gd)):,}" if not s["is_new"] else f"฿{int(s['c_gmv']):,}"
-                        p_str = ""
-                        is_ex = not s["is_new"] and s["p_sell"] > 0
-                        if is_ex and int(pd_) != 0:
-                            p_col = "#DC2626" if pd_>0 else "#16A34A"
-                            p_sym = "▲" if pd_>0 else "▼"
-                            p_str = f'<span style="color:{p_col};font-size:9px;margin-left:4px">{p_sym}฿{abs(int(pd_)):,}</span>'
+                        name    = s["svc"][:38] + ("…" if len(s["svc"])>38 else "")
+                        c_gmv   = s["c_gmv"]
+                        p_gmv   = s["p_gmv"]
+                        # Apply run rate to current month GMV
+                        c_gmv_rr = c_gmv / _pf_cov3 if pf_is_rr and _pf_cov3 > 0 and c_gmv > 0 else c_gmv
+                        gd      = c_gmv_rr - p_gmv  # RR-adjusted change
+                        g_col   = "#16A34A" if gd >= 0 else "#DC2626"
+                        g_sym   = "▲" if gd >= 0 else "▼"
+                        if s["is_new"]:
+                            g_str = f"฿{int(c_gmv_rr):,}"
+                            pct_str = ""
+                        else:
+                            g_str = f"{g_sym}฿{abs(int(gd)):,}"
+                            pct_str = (f'<span style="font-size:9px;color:{g_col};margin-left:4px">' +
+                                       f'({g_sym}{abs(gd)/p_gmv*100:.0f}%)</span>') if p_gmv > 0 else ""
                         new_b = ' <span style="font-size:8px;background:#EFF6FF;color:#2563EB;padding:1px 4px;border-radius:2px">NEW</span>' if s["is_new"] else ""
                         return (f'<div style="display:flex;justify-content:space-between;align-items:center;'
                                 f'padding:3px 0;border-bottom:1px solid #f5f5f5;font-size:10px">'
                                 f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{name}{new_b}</span>'
                                 f'<span style="color:{g_col};font-weight:600;white-space:nowrap;margin-left:8px">{g_str}</span>'
-                                f'{p_str}</div>')
+                                f'{pct_str}</div>')
+
+                    # Total growth and drop for contribution %
+                    total_growth_gmv = sum(s["c_gmv"]/_pf_cov3 - s["p_gmv"] for s in growing if s["p_gmv"]>0) +                                        sum(s["c_gmv"]/_pf_cov3 for s in new_svcs)
+                    total_drop_gmv   = abs(sum(s["c_gmv"]/_pf_cov3 - s["p_gmv"] for s in dropping if s["p_gmv"]>0))
+
+                    def contrib_badge(s, total_pool):
+                        c_rr = s["c_gmv"]/_pf_cov3 if pf_is_rr and _pf_cov3>0 and s["c_gmv"]>0 else s["c_gmv"]
+                        if s["is_new"]:
+                            delta = c_rr
+                        else:
+                            delta = abs(c_rr - s["p_gmv"])
+                        pct = delta/total_pool*100 if total_pool>0 else 0
+                        return f'<span style="font-size:8px;background:#f0f0f0;color:#666;padding:1px 4px;border-radius:3px;margin-left:4px">{pct:.0f}% of change</span>' if pct >= 5 else ""
 
                     html = '<div style="margin-top:6px;padding:8px 10px;background:#F8FAFF;border-radius:6px;border:1px solid #E8F0FE">'
                     html += '<div style="font-size:9px;font-weight:600;color:#3B8BD4;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Service Breakdown</div>'
 
                     if growing[:3]:
                         html += '<div style="font-size:9px;color:#16A34A;font-weight:600;margin:4px 0 2px">📈 ขายดีขึ้น</div>'
-                        html += "".join(svc_row(s) for s in growing[:3])
+                        for s in growing[:3]:
+                            row_html = svc_row(s)
+                            badge    = contrib_badge(s, total_growth_gmv)
+                            # Insert badge before closing </div>
+                            html += row_html.replace("</div>", badge+"</div>", 1) if badge else row_html
                     if new_svcs[:2]:
                         html += '<div style="font-size:9px;color:#2563EB;font-weight:600;margin:4px 0 2px">✨ Service ใหม่</div>'
-                        html += "".join(svc_row(s) for s in new_svcs[:2])
+                        for s in new_svcs[:2]:
+                            row_html = svc_row(s)
+                            badge    = contrib_badge(s, total_growth_gmv)
+                            html += row_html.replace("</div>", badge+"</div>", 1) if badge else row_html
                     if dropping[:3]:
                         html += '<div style="font-size:9px;color:#DC2626;font-weight:600;margin:4px 0 2px">📉 ขายแย่ลง</div>'
-                        html += "".join(svc_row(s) for s in dropping[:3])
+                        for s in dropping[:3]:
+                            row_html = svc_row(s)
+                            badge    = contrib_badge(s, total_drop_gmv)
+                            html += row_html.replace("</div>", badge+"</div>", 1) if badge else row_html
 
                     html += '</div>'
                     return html
@@ -3080,7 +3106,7 @@ with tab_portfolio:
     <div style="background:#fafafa;border-radius:6px;padding:7px 10px;text-align:center">
       <div style="font-size:9px;color:#bbb;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Price vs Floor</div>
       <div style="font-size:14px;color:{price_color};font-weight:600">{price_str}</div>
-
+      {price_sku_str}
     </div>
   </div>
   <div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 4px 4px 0;padding:6px 10px;font-size:11px;color:#555">
