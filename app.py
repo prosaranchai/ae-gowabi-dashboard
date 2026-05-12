@@ -3132,8 +3132,6 @@ with tab_portfolio:
         <span style="font-size:9px;color:#bbb;margin-left:4px">vs {pf_prev_lbl}</span>
       </div>
     </div>
-    <span style="font-size:10px;font-weight:600;background:{pri_bg};color:{pri_c};padding:2px 8px;border-radius:4px;flex-shrink:0">{row["priority"]}</span>
-    <div style="font-size:18px;font-weight:700;color:{health_c};flex-shrink:0">{row["health"]:.1f}</div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">
     <div style="background:#fafafa;border-radius:6px;padding:7px 10px;text-align:center">
