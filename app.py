@@ -1975,29 +1975,31 @@ with tab_gmv:
                     prev_mk_s = mk
                 ordered_cols += ["Total"]
                 sv_pivot = sv_pivot[ordered_cols]
-                # Build display df with GMV + RR + Δ columns
+                # Build display df — use sv_pivot which has month keys as columns
                 sv_disp = pd.DataFrame(index=sv_pivot.index)
                 sv_disp.index.name = "Service"
                 _prev_mk_svc = None
                 for _mk in all_mks_svc:
+                    if _mk not in sv_pivot.columns: continue
                     _lbl   = idx_now.get(_mk,{}).get("label",_mk)
                     _s_inf = idx_now.get(_mk,{}).get("stats",{})
                     _cov   = _s_inf.get("coverage_pct",100)/100
                     _inc   = not _s_inf.get("is_complete",True)
-                    sv_disp[_lbl] = sv_pivot[_mk].apply(lambda x: f"฿{int(x):,}" if x>0 else "–")
+                    _col   = sv_pivot[_mk]
+                    sv_disp[_lbl] = _col.apply(lambda x: f"฿{int(x):,}" if x>0 else "–")
                     if _inc and _cov > 0:
-                        sv_disp[f"RR {_lbl}"] = sv_pivot[_mk].apply(lambda x: f"฿{int(x/_cov):,}" if x>0 else "–")
-                    if _prev_mk_svc:
-                        _prev_lbl = idx_now.get(_prev_mk_svc,{}).get("label",_prev_mk_svc)
+                        sv_disp[f"RR {_lbl}"] = _col.apply(lambda x: f"฿{int(x/_cov):,}" if x>0 else "–")
+                    if _prev_mk_svc and _prev_mk_svc in sv_pivot.columns:
                         _prev_cov = idx_now.get(_prev_mk_svc,{}).get("stats",{}).get("coverage_pct",100)/100
                         _prev_inc = not idx_now.get(_prev_mk_svc,{}).get("stats",{}).get("is_complete",True)
-                        def _delta_row(row):
-                            c = row[_mk]; p = row[_prev_mk_svc]
-                            c_rr = c/_cov if _inc and _cov>0 and c>0 else c
-                            p_rr = p/_prev_cov if _prev_inc and _prev_cov>0 and p>0 else p
-                            if p_rr == 0: return "new" if c>0 else "–"
-                            return f"{(c_rr-p_rr)/p_rr*100:+.0f}%"
-                        sv_disp[f"{_lbl} Δ"] = sv_pivot.apply(_delta_row, axis=1)
+                        _pc = sv_pivot[_prev_mk_svc]
+                        delta_vals = []
+                        for c_val, p_val in zip(_col, _pc):
+                            c_rr = c_val/_cov if _inc and _cov>0 and c_val>0 else c_val
+                            p_rr = p_val/_prev_cov if _prev_inc and _prev_cov>0 and p_val>0 else p_val
+                            if p_rr == 0: delta_vals.append("new" if c_val>0 else "–")
+                            else: delta_vals.append(f"{(c_rr-p_rr)/p_rr*100:+.0f}%")
+                        sv_disp[f"{_lbl} Δ"] = delta_vals
                     _prev_mk_svc = _mk
                 sv_disp["Total"] = sv_pivot["Total"].apply(lambda x: f"฿{int(x):,}" if x>0 else "–")
 
