@@ -2826,16 +2826,23 @@ with tab_portfolio:
                     prev_gmv = p.get("gmv",0) / prev_cov if prev_is_rr and prev_cov > 0 else p.get("gmv",0)
                     gmv_pct  = (cur_gmv-prev_gmv)/prev_gmv*100 if prev_gmv > 0 else None
 
-                    # View MoM
+                    # View MoM — use prev month view as fallback if cur month has no view data
+                    _has_view = idx_now.get(pf_mk,{}).get("stats",{}).get("has_view_data", True)
                     cur_view  = r.get("avg_view",0) / cur_cov  if cur_is_rr  else r.get("avg_view",0)
                     prev_view = p.get("avg_view",0) / prev_cov if prev_is_rr else p.get("avg_view",0)
-                    view_pct  = (cur_view-prev_view)/prev_view*100 if prev_view > 0 else None
+                    if not _has_view and prev_view > 0:
+                        # No view data for current month — show prev as reference
+                        cur_view = None
+                    view_pct  = (cur_view-prev_view)/prev_view*100 if (cur_view and prev_view > 0) else None
 
-                    # CVR MoM — show as PP (percentage points)
+                    # CVR MoM
+                    _has_cr  = _has_view
                     cur_cr   = r.get("avg_cr",0)
                     prev_cr  = p.get("avg_cr",0)
-                    cr_pct   = (cur_cr-prev_cr)/prev_cr*100 if prev_cr > 0 else None
-                    cr_pp    = cur_cr - prev_cr  # absolute PP difference
+                    if not _has_cr:
+                        cur_cr = None
+                    cr_pct   = (cur_cr-prev_cr)/prev_cr*100 if (cur_cr and prev_cr > 0) else None
+                    cr_pp    = (cur_cr - prev_cr) if (cur_cr is not None and prev_cr) else None
 
                     # Price: % SKUs cheaper (price_score improved = lower price_above)
                     cur_pa   = r.get("price_above",0)
@@ -2851,8 +2858,10 @@ with tab_portfolio:
                         "prev_gmv":     int(prev_gmv),
                         "gmv_pct":      gmv_pct,
                         "cur_view":     cur_view,
+                        "prev_view":    prev_view,
                         "view_pct":     view_pct,
                         "cur_cr":       cur_cr,
+                        "prev_cr":      prev_cr,
                         "cr_pct":       cr_pct,
                         "cr_pp":        cr_pp,
                         "price_above":  cur_pa,
@@ -3044,9 +3053,10 @@ with tab_portfolio:
                     )
                     # Sort by RR GMV desc within the top10
                     df = df.copy()
-                    df["_sort_gmv"] = pd.to_numeric(df["gmv_rr"], errors="coerce").fillna(
-                        pd.to_numeric(df["cur_gmv"], errors="coerce").fillna(0)
-                    )
+                    _cov_sort = pf_cov if pf_cov > 0 else 1.0
+                    df["_sort_gmv"] = pd.to_numeric(df["cur_gmv"], errors="coerce").fillna(0)
+                    if pf_is_rr:
+                        df["_sort_gmv"] = df["_sort_gmv"] / _cov_sort
                     df = df.sort_values("_sort_gmv", ascending=False)
                     for rank, (_, row) in enumerate(df.iterrows(), 1):
                         comment = gen_comment(row, is_growth=is_growth)
@@ -3054,8 +3064,11 @@ with tab_portfolio:
                         pri_c   = "#DC2626"  if row["priority"]=="critical" else "#D97706"  if row["priority"]=="warning" else "#16A34A"
                         health_c = sc(row["health"])
 
-                        view_str = f'{int(row["cur_view"]):,}' if row["cur_view"] else "–"
-                        cr_str   = f'{row["cur_cr"]:.2f}%'     if row["cur_cr"]   else "–"
+                        _pf_has_v = idx_now.get(pf_mk,{}).get("stats",{}).get("has_view_data",True)
+                        view_str = (f'{int(row["cur_view"]):,}' if row["cur_view"] else
+                                    (f'({int(row.get("prev_view",0)):,} Apr)' if row.get("prev_view") else "–"))
+                        cr_str   = (f'{row["cur_cr"]:.2f}%' if row.get("cur_cr") else
+                                    (f'({row.get("prev_cr",0):.2f}% Apr)' if row.get("prev_cr") else "–"))
 
                         price_color = "#1a1a1a"
                         price_str   = ""  # removed price vs floor %
