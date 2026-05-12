@@ -2812,13 +2812,18 @@ with tab_portfolio:
                 prev_cov = idx_now[pf_prev_mk]["stats"].get("coverage_pct",100)/100
                 prev_is_rr = not idx_now[pf_prev_mk]["stats"].get("is_complete",True)
 
-                # Build prev map
+                # Build prev map — normalize shop_id_s to strip .0
+                def _norm_sid(v):
+                    return str(v).replace(".0","").strip() if v is not None else ""
+                if "shop_id_s" in prev_am.columns:
+                    prev_am = prev_am.copy()
+                    prev_am["shop_id_s"] = prev_am["shop_id_s"].apply(_norm_sid)
                 prev_map = prev_am.set_index("shop_id_s").to_dict("index") if "shop_id_s" in prev_am.columns else {}
 
                 # Compute MoM metrics per shop
                 rows = []
                 for _, r in cur_am.iterrows():
-                    sid = str(r.get("shop_id_s",""))
+                    sid = _norm_sid(r.get("shop_id_s",""))
                     p   = prev_map.get(sid, {})
 
                     # GMV with run rate
