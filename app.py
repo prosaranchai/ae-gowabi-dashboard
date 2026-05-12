@@ -3109,7 +3109,7 @@ with tab_portfolio:
     </div>
   </div>
 </div>""", unsafe_allow_html=True)
-                        _btn_lbl = "▲ ซ่อน" if _is_open else "▼ ดู comment & services"
+                        _btn_lbl = "▲ Hide" if _is_open else "▼ Comment & Services"
                         if st.button(_btn_lbl, key=f"pbtn_{rank}_{row.get('shop_id','')}", use_container_width=True):
                             st.session_state[_shop_key] = not _is_open
                             st.rerun()
