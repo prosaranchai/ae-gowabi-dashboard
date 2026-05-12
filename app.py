@@ -2664,14 +2664,49 @@ with tab_sku:
         s1c1, s1c2 = st.columns(2)
 
         with s1c1:
-            st.caption("🏆 Top 20 Services — GMV")
+            # Load prev month for MoM
+            _sku_all_mks  = sorted(idx_now.keys())
+            _sku_prev_mk  = _sku_all_mks[_sku_all_mks.index(sel_month)-1] if sel_month in _sku_all_mks and _sku_all_mks.index(sel_month)>0 else None
+            _sku_prev_lbl = idx_now[_sku_prev_mk]["label"] if _sku_prev_mk else None
+            _sku_cov      = idx_now[sel_month]["stats"].get("coverage_pct",100)/100
+            _sku_is_rr    = not idx_now[sel_month]["stats"].get("is_complete",True)
+            prev_svc_map  = {}
+            if _sku_prev_mk:
+                _prev_md = load_month_data(_sku_prev_mk)
+                if _prev_md:
+                    _ps = pd.DataFrame(_prev_md.get("svc_perf",[]))
+                    if len(_ps):
+                        if sku_am_filt  != "ทั้งหมด": _ps = _ps[_ps["kam"]==sku_am_filt]
+                        if sku_cat_filt != "ทั้งหมด": _ps = _ps[_ps["category"]==sku_cat_filt]
+                        prev_svc_map = _ps.groupby("service_name")["gmv"].sum().to_dict()
+
             top_svc = sdf.groupby("service_name").agg(gmv=("gmv","sum"), orders=("orders","sum"),
                 shops=("shop_id_s","nunique"), basket=("basket","mean")).reset_index()
             top_svc = top_svc.nlargest(20,"gmv").copy()
-            top_svc["gmv"]    = top_svc["gmv"].apply(fmt_gmv)
-            top_svc["basket"] = top_svc["basket"].apply(lambda x: f"฿{x:,.0f}")
-            top_svc.columns   = ["Service","GMV","Orders","Shops","Avg Basket"]
-            st.dataframe(top_svc, hide_index=True, use_container_width=True, height=340)
+            top_svc["gmv_rr"] = (top_svc["gmv"] / _sku_cov if _sku_is_rr and _sku_cov>0 else top_svc["gmv"]).round(0)
+            rr_label = "GMV (RR)" if _sku_is_rr else "GMV"
+            top_svc[rr_label] = top_svc["gmv_rr"].apply(fmt_gmv)
+            if prev_svc_map:
+                top_svc["Prev GMV"] = top_svc["service_name"].map(lambda x: fmt_gmv(prev_svc_map.get(x,0)) if prev_svc_map.get(x,0)>0 else "–")
+                top_svc["MoM"] = top_svc.apply(lambda r:
+                    f"{(r['gmv_rr']-prev_svc_map.get(r['service_name'],0))/prev_svc_map.get(r['service_name'],1)*100:+.0f}%"
+                    if prev_svc_map.get(r["service_name"],0)>0 else ("new" if r["gmv_rr"]>0 else "–"), axis=1)
+            top_svc["Orders"] = top_svc["orders"]
+            top_svc["Shops"]  = top_svc["shops"]
+            top_svc["Avg Basket"] = top_svc["basket"].apply(lambda x: f"฿{x:,.0f}")
+            show_cols = ["service_name", rr_label] + (["Prev GMV","MoM"] if prev_svc_map else []) + ["Orders","Shops","Avg Basket"]
+            top_svc_disp = top_svc[show_cols].rename(columns={"service_name":"Service"})
+            def _css_mom_svc(v):
+                if not isinstance(v,str) or v in ["–","new"]: return "color:#aaa"
+                try:
+                    f=float(v.replace("+","").replace("%",""))
+                    return "color:#16A34A;font-weight:600" if f>0 else "color:#DC2626;font-weight:600" if f<0 else ""
+                except: return ""
+            st.caption(f"🏆 Top 20 Services — {rr_label}" + (f" vs {_sku_prev_lbl}" if _sku_prev_lbl else ""))
+            _styled_top = top_svc_disp.style.set_properties(**{"font-size":"11px"})
+            if "MoM" in top_svc_disp.columns:
+                _styled_top = _styled_top.map(_css_mom_svc, subset=["MoM"])
+            st.dataframe(_styled_top, hide_index=True, use_container_width=True, height=380)
 
         with s1c2:
             st.caption("📉 Bottom 20 Services — GMV (ขายน้อย แต่มี listing)")
