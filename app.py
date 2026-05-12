@@ -201,8 +201,10 @@ REAL_AMS = {
     "THINEEKARN BD","Samir","Lanna","Kittitut BD",
     "Pym","Femille","Pop SSU","Amm Junior","Sasithorn BD",
     "Peerawat Dangsupa","Amy","Muk BD","Phornphannarai",
-    # Non-personal accounts excluded: UN, VPM, SSU, No owner,
-    # Temporarily closed, Permanently closed, End Contract, Invalid
+    # Accounts included per request
+    "UN", "VPM", "SSU", "No owner",
+    "Temporarily closed", "Permanently closed", "End Contract ",
+    "Invalid",
 }
 EXCLUDED  = {"cancelled","refunded","expired","no_show"}
 PILLAR_COLS  = ["sku_score","price_score","view_score","cvr_score"]
@@ -3040,6 +3042,12 @@ with tab_portfolio:
                         f'color:{title_color};margin-bottom:10px">{title}</div>',
                         unsafe_allow_html=True
                     )
+                    # Sort by RR GMV desc within the top10
+                    df = df.copy()
+                    df["_sort_gmv"] = pd.to_numeric(df["gmv_rr"], errors="coerce").fillna(
+                        pd.to_numeric(df["cur_gmv"], errors="coerce").fillna(0)
+                    )
+                    df = df.sort_values("_sort_gmv", ascending=False)
                     for rank, (_, row) in enumerate(df.iterrows(), 1):
                         comment = gen_comment(row, is_growth=is_growth)
                         pri_bg  = "#FEF2F2" if row["priority"]=="critical" else "#FFFBEB" if row["priority"]=="warning" else "#F0FDF4"
@@ -3070,11 +3078,11 @@ with tab_portfolio:
                                 price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">✓ ราคาไม่ขึ้นจากเดือนก่อน</div>'
                         else:
                             price_sku_str = ""
-                        _shop_key = f"port_expand_{rank}_{row.get('shop_id','')}"
-                        _is_open  = st.session_state.get(_shop_key, False)
+
+
 
                         st.markdown(f"""
-<div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:{"4px" if _is_open else "8px"};page-break-inside:avoid">
+<div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:8px;page-break-inside:avoid">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
     <div style="width:22px;height:22px;border-radius:50%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;color:#555">{rank}</div>
     <div style="flex:1;min-width:0">
@@ -3111,13 +3119,11 @@ with tab_portfolio:
       {price_sku_str}
     </div>
   </div>
+  <div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 4px 4px 0;padding:6px 10px;font-size:11px;color:#555">
+    💡 {comment}
+  </div>
+  {sku_html}
 </div>""", unsafe_allow_html=True)
-                        _btn_lbl = "▲ Hide" if _is_open else "▼ Comment & Services"
-                        if st.button(_btn_lbl, key=f"pbtn_{rank}_{row.get('shop_id','')}", use_container_width=True):
-                            st.session_state[_shop_key] = not _is_open
-                            st.rerun()
-                        if _is_open:
-                            st.markdown(f'''<div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 6px 6px 0;padding:8px 12px;font-size:11px;color:#555;margin-bottom:4px">💡 {comment}</div>{sku_html}''', unsafe_allow_html=True)
 
                 # ── Header ────────────────────────────────────────────────────
                 _pf_cur_g  = float(cur_am["gmv"].sum())
