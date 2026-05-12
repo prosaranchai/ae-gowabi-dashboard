@@ -1096,6 +1096,11 @@ if mdata is None:
     st.error("โหลดข้อมูลไม่ได้ กรุณา refresh"); st.stop()
 
 shops_df = pd.DataFrame(mdata["shops"])
+# Ensure numeric columns
+for _nc in ["gmv","health_score","sku_score","price_score","view_score","cvr_score",
+            "total_orders","unique_customers","new_customers","avg_view","avg_cr"]:
+    if _nc in shops_df.columns:
+        shops_df[_nc] = pd.to_numeric(shops_df[_nc], errors="coerce").fillna(0)
 am_df    = pd.DataFrame(mdata["am"])
 cat_df   = pd.DataFrame(mdata["category"])
 stats    = mdata["stats"]
@@ -2419,7 +2424,17 @@ with tab_action:
         "Alert count (มากสุดก่อน)":   ("alert_count", False),
     }
     sc_col, sc_asc = sort_map.get(sort_by, ("health_score", True))
-    action_shops = action_shops.sort_values(sc_col, ascending=sc_asc)
+    # Force numeric before sort (JSON deserialization may give strings)
+    if sc_col in action_shops.columns:
+        action_shops[sc_col] = pd.to_numeric(action_shops[sc_col], errors="coerce").fillna(0)
+    _act_cov = stats.get("coverage_pct",100)/100
+    _act_inc = not stats.get("is_complete",True)
+    if _act_inc and _act_cov > 0 and sc_col in ["gmv","avg_view","total_orders"]:
+        action_shops = action_shops.assign(
+            _sort_rr=action_shops[sc_col] / _act_cov
+        ).sort_values("_sort_rr", ascending=sc_asc).drop(columns=["_sort_rr"])
+    else:
+        action_shops = action_shops.sort_values(sc_col, ascending=sc_asc)
 
     # ── Task summary for selected KAM ─────────────────────────────────────
     if my_kam_id := st.session_state.get("my_kam_identity","–"):
