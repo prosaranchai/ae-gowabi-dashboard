@@ -2824,13 +2824,29 @@ with tab_portfolio:
                 if "shop_id_s" in prev_am.columns:
                     prev_am["shop_id_s"] = prev_am["shop_id_s"].apply(_norm_sid)
 
-                prev_map = prev_am.set_index("shop_id_s").to_dict("index") if "shop_id_s" in prev_am.columns else {}
+                # Build prev_map with multiple key formats for robust lookup
+                prev_map = {}
+                if "shop_id_s" in prev_am.columns:
+                    for _, pr in prev_am.iterrows():
+                        raw = str(pr.get("shop_id_s",""))
+                        for key in [raw, raw.replace(".0","").strip(),
+                                    raw.strip(), str(int(float(raw))) if raw.replace(".","").isdigit() else raw]:
+                            if key and key not in prev_map:
+                                prev_map[key] = pr.to_dict()
+
+                # Also build by organization_name as fallback
+                prev_map_name = {}
+                if "organization_name" in prev_am.columns:
+                    for _, pr in prev_am.iterrows():
+                        nm = str(pr.get("organization_name","")).strip()
+                        if nm: prev_map_name[nm] = pr.to_dict()
 
                 # Compute MoM metrics per shop
                 rows = []
                 for _, r in cur_am.iterrows():
                     sid = _norm_sid(r.get("shop_id_s",""))
-                    p   = prev_map.get(sid, {})
+                    # Try shop_id_s first, then organization_name as fallback
+                    p   = prev_map.get(sid) or prev_map.get(str(r.get("shop_id_s",""))) or                           prev_map_name.get(str(r.get("organization_name","")).strip()) or {}
 
                     # GMV with run rate
                     cur_gmv  = r["gmv"] / cur_cov  if cur_is_rr  and cur_cov  > 0 else r["gmv"]
