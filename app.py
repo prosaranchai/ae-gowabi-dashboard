@@ -2489,11 +2489,11 @@ with tab_action:
                   <span style="font-size:11px;background:#F0FDF4;color:#16A34A;padding:3px 10px;border-radius:4px;font-weight:600">✅ Done {len(done_shops)}</span>
                 </div>""", unsafe_allow_html=True)
 
+    # ── Load all comments for this month (must be before task summary) ────────
+    all_comments_cache = load_all_comments_cached(sel_month)
+
     st.markdown(f'<div class="section-title">Action List — {len(action_shops)} ร้านที่ต้องดูแล</div>', unsafe_allow_html=True)
     st.caption(f"เรียงตาม {sort_by}")
-
-    # ── Load all comments for this month ────────────────────────────────────
-    all_comments_cache = load_all_comments_cached(sel_month)
 
     # ── Load previous month for MoM comparison ──────────────────────────────
     all_mk   = sorted(idx_now.keys())
@@ -3156,17 +3156,22 @@ with tab_portfolio:
                             # Build price detail rows for all services that have prev price
                             price_rows_html = ""
                             for _ps in sorted(existing_skus, key=lambda x: (x["c_sell_min"]-x["p_sell_min"]), reverse=True):
-                                _diff = _ps["c_sell_min"] - _ps["p_sell_min"]
-                                _col  = "#DC2626" if _diff > 0 else "#16A34A" if _diff < 0 else "#888"
-                                _sym  = "▲" if _diff > 0 else "▼" if _diff < 0 else "="
-                                _nm   = _ps["svc"]
-                                price_rows_html += (
-                                    f'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #f0f0f0;font-size:10px">' +
-                                    f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px">{_nm}</span>' +
-                                    f'<span style="color:#aaa;white-space:nowrap">฿{int(_ps["p_sell_min"]):,} → </span>' +
-                                    f'<span style="color:{_col};font-weight:600;white-space:nowrap;margin-left:4px">฿{int(_ps["c_sell_min"]):,} ({_sym}฿{abs(int(_diff)):,})</span>' +
-                                    f'</div>'
-                                )
+                                try:
+                                    _diff = float(_ps["c_sell_min"] or 0) - float(_ps["p_sell_min"] or 0)
+                                    _col  = "#DC2626" if _diff > 0 else "#16A34A" if _diff < 0 else "#888"
+                                    _sym  = "▲" if _diff > 0 else "▼" if _diff < 0 else "="
+                                    _nm   = str(_ps["svc"]).replace("{","").replace("}","")
+                                    _p_sell = int(float(_ps["p_sell_min"] or 0))
+                                    _c_sell = int(float(_ps["c_sell_min"] or 0))
+                                    price_rows_html += (
+                                        f'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #f0f0f0;font-size:10px">' +
+                                        f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px">{_nm}</span>' +
+                                        f'<span style="color:#aaa;white-space:nowrap">฿{_p_sell:,} &rarr; </span>' +
+                                        f'<span style="color:{_col};font-weight:600;white-space:nowrap;margin-left:4px">฿{_c_sell:,} ({_sym}฿{abs(int(_diff)):,})</span>' +
+                                        f'</div>'
+                                    )
+                                except Exception:
+                                    pass
                             _onclick = "var d=this.nextElementSibling;d.style.display=d.style.display==='none'?'block':'none'"
                             price_sku_str = (
                                 f'<div style="font-size:9px;color:{badge_col};margin-top:2px;cursor:pointer"'
