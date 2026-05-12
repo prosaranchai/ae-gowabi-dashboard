@@ -3167,10 +3167,10 @@ with tab_portfolio:
                                     f'<span style="color:{_col};font-weight:600;white-space:nowrap;margin-left:4px">฿{int(_ps["c_sell_min"]):,} ({_sym}฿{abs(int(_diff)):,})</span>' +
                                     f'</div>'
                                 )
+                            _onclick = "var d=this.nextElementSibling;d.style.display=d.style.display==='none'?'block':'none'"
                             price_sku_str = (
-                                f'<div style="font-size:9px;color:{badge_col};margin-top:2px;cursor:pointer" ' +
-                                f'onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">' +
-                                f'▾ {badge_txt}</div>' +
+                                f'<div style="font-size:9px;color:{badge_col};margin-top:2px;cursor:pointer"'
+                                f' onclick="{_onclick}">▾ {badge_txt}</div>'
                                 f'<div style="display:none;margin-top:4px;max-height:160px;overflow-y:auto">{price_rows_html}</div>'
                             )
                         else:
