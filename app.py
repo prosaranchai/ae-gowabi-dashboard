@@ -2812,15 +2812,30 @@ with tab_portfolio:
                 prev_cov = idx_now[pf_prev_mk]["stats"].get("coverage_pct",100)/100
                 prev_is_rr = not idx_now[pf_prev_mk]["stats"].get("is_complete",True)
 
-                # Merge cur and prev on organization_name (most reliable cross-month join)
+                # ── FIX: Merge on shop_id_s (numeric ID) instead of organization_name
+                # to avoid string mismatch issues with Thai chars, brackets, spaces
                 prev_cols = ["organization_name","gmv","total_orders","avg_view","avg_cr","price_above",
                              "health_score","sku_score","price_score","view_score","cvr_score",
                              "alerts","priority","sku_count","category","shop_id_s"]
                 prev_cols = [c for c in prev_cols if c in prev_am.columns]
-                prev_rename = {c: f"{c}_prev" for c in prev_cols if c != "organization_name"}
+
+                # Rename all prev cols EXCEPT shop_id_s (join key) and organization_name (keep for display)
+                prev_rename = {c: f"{c}_prev" for c in prev_cols
+                               if c not in ["organization_name", "shop_id_s"]}
                 prev_for_merge = prev_am[prev_cols].rename(columns=prev_rename).copy()
 
-                merged = cur_am.merge(prev_for_merge, on="organization_name", how="left")
+                # Ensure shop_id_s is string on both sides before merging
+                cur_am["shop_id_s"]           = cur_am["shop_id_s"].astype(str).str.strip()
+                prev_for_merge["shop_id_s"]   = prev_for_merge["shop_id_s"].astype(str).str.strip()
+
+                merged = cur_am.merge(
+                    prev_for_merge,
+                    on="shop_id_s",
+                    how="left",
+                    suffixes=("", "_dup")
+                )
+                # Drop any duplicate columns from the merge
+                merged = merged[[c for c in merged.columns if not c.endswith("_dup")]]
 
                 # Compute MoM metrics per shop
                 rows = []
@@ -2860,8 +2875,8 @@ with tab_portfolio:
                         "shop_id":      str(r.get("shop_id_s","")),
                         "name":         r["organization_name"],
                         "category":     r.get("category",""),
-                        "cur_gmv":      int(cur_gmv) if cur_gmv and not pd.isna(cur_gmv) else 0,
-                        "prev_gmv":     int(prev_gmv) if prev_gmv and not pd.isna(prev_gmv) else 0,
+                        "cur_gmv":      int(cur_gmv),
+                        "prev_gmv":     int(prev_gmv),
                         "gmv_pct":      gmv_pct,
                         "cur_view":     cur_view,
                         "prev_view":    prev_view,
@@ -2965,7 +2980,8 @@ with tab_portfolio:
                                 f'{pct_str}</div>')
 
                     # Total growth and drop for contribution %
-                    total_growth_gmv = sum(s["c_gmv"]/_pf_cov3 - s["p_gmv"] for s in growing if s["p_gmv"]>0) +                                        sum(s["c_gmv"]/_pf_cov3 for s in new_svcs)
+                    total_growth_gmv = sum(s["c_gmv"]/_pf_cov3 - s["p_gmv"] for s in growing if s["p_gmv"]>0) + \
+                                       sum(s["c_gmv"]/_pf_cov3 for s in new_svcs)
                     total_drop_gmv   = abs(sum(s["c_gmv"]/_pf_cov3 - s["p_gmv"] for s in dropping if s["p_gmv"]>0))
 
                     def contrib_badge(s, total_pool):
@@ -3094,8 +3110,6 @@ with tab_portfolio:
                                 price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">✓ ราคาไม่ขึ้นจากเดือนก่อน</div>'
                         else:
                             price_sku_str = ""
-
-
 
                         st.markdown(f"""
 <div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:8px;page-break-inside:avoid">
