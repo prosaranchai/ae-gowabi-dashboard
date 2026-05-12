@@ -2996,13 +2996,16 @@ with tab_portfolio:
 
                 def render_sku_breakdown(skus, is_growth=True):
                     if not skus: return ""
-                    # Split into growing vs declining services
-                    growing  = sorted([s for s in skus if s["c_gmv"]-s["p_gmv"] > 0],  key=lambda x: -(x["c_gmv"]-x["p_gmv"]))
-                    dropping = sorted([s for s in skus if s["c_gmv"]-s["p_gmv"] < 0],  key=lambda x: x["c_gmv"]-x["p_gmv"])
+                    # Split using RR-adjusted c_gmv so partial months compare fairly
+                    def _rr(g): return g / _pf_cov3 if pf_is_rr and _pf_cov3 > 0 and g > 0 else g
+                    growing  = sorted([s for s in skus if _rr(s["c_gmv"])-s["p_gmv"] > 0 and not s["is_new"]],
+                                      key=lambda x: -(_rr(x["c_gmv"])-x["p_gmv"]))
+                    dropping = sorted([s for s in skus if _rr(s["c_gmv"])-s["p_gmv"] < 0 and not s["is_new"]],
+                                      key=lambda x: _rr(x["c_gmv"])-x["p_gmv"])
                     new_svcs = [s for s in skus if s["is_new"] and s["c_gmv"] > 0]
 
                     def svc_row(s, show_sign=True):
-                        name    = s["svc"][:38] + ("…" if len(s["svc"])>38 else "")
+                        name    = s["svc"]  # full name — no truncation
                         c_gmv   = s["c_gmv"]
                         p_gmv   = s["p_gmv"]
                         # Apply run rate to current month GMV
@@ -3141,18 +3144,35 @@ with tab_portfolio:
                         skus      = all_skus[:5]
                         sku_html  = render_sku_breakdown(skus, is_growth=is_growth)
 
-                        # % SKUs more expensive than last month
+                        # % SKUs more expensive than last month + expandable detail
                         existing_skus = [s for s in all_skus if not s["is_new"] and s["p_sell"] > 0]
                         n_total   = len(existing_skus)
                         n_up      = sum(1 for s in existing_skus if s["price_up"])
                         if n_total > 0:
-                            pct_up    = n_up / n_total * 100
-                            if pct_up >= 50:
-                                price_sku_str = f'<div style="font-size:9px;color:#DC2626;margin-top:2px">{n_up}/{n_total} SKUs แพงขึ้น ({pct_up:.0f}%)</div>'
-                            elif pct_up > 0:
-                                price_sku_str = f'<div style="font-size:9px;color:#D97706;margin-top:2px">{n_up}/{n_total} SKUs แพงขึ้น ({pct_up:.0f}%)</div>'
-                            else:
-                                price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">✓ ราคาไม่ขึ้นจากเดือนก่อน</div>'
+                            pct_up = n_up / n_total * 100
+                            badge_col = "#DC2626" if pct_up >= 50 else "#D97706" if pct_up > 0 else "#16A34A"
+                            badge_txt = (f"{n_up}/{n_total} SKUs แพงขึ้น ({pct_up:.0f}%)"
+                                         if pct_up > 0 else "✓ ราคาไม่ขึ้นจากเดือนก่อน")
+                            # Build price detail rows for all services that have prev price
+                            price_rows_html = ""
+                            for _ps in sorted(existing_skus, key=lambda x: (x["c_sell_min"]-x["p_sell_min"]), reverse=True):
+                                _diff = _ps["c_sell_min"] - _ps["p_sell_min"]
+                                _col  = "#DC2626" if _diff > 0 else "#16A34A" if _diff < 0 else "#888"
+                                _sym  = "▲" if _diff > 0 else "▼" if _diff < 0 else "="
+                                _nm   = _ps["svc"]
+                                price_rows_html += (
+                                    f'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #f0f0f0;font-size:10px">' +
+                                    f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px">{_nm}</span>' +
+                                    f'<span style="color:#aaa;white-space:nowrap">฿{int(_ps["p_sell_min"]):,} → </span>' +
+                                    f'<span style="color:{_col};font-weight:600;white-space:nowrap;margin-left:4px">฿{int(_ps["c_sell_min"]):,} ({_sym}฿{abs(int(_diff)):,})</span>' +
+                                    f'</div>'
+                                )
+                            price_sku_str = (
+                                f'<div style="font-size:9px;color:{badge_col};margin-top:2px;cursor:pointer" ' +
+                                f'onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">' +
+                                f'▾ {badge_txt}</div>' +
+                                f'<div style="display:none;margin-top:4px;max-height:160px;overflow-y:auto">{price_rows_html}</div>'
+                            )
                         else:
                             price_sku_str = ""
 
