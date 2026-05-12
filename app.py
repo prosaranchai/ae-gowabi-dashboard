@@ -1452,8 +1452,9 @@ with tab_ov:
                 row = {
                     "Shop":     sh.get("organization_name",""),
                     "Category": sh.get("category",""),
-                    f"GMV {lbl_cur}":    fmt_rr(c_gmv,  cur_cov,  cur_inc,  fmt_full),
-                    f"GMV {lbl_prev}":   fmt_rr(p_gmv,  prev_cov2,prev_inc2,fmt_prev_gmv) if p_gmv is not None else "–",
+                    f"GMV {lbl_cur}":    fmt_full(c_gmv),
+                    f"RR {lbl_cur}":     fmt_full(c_gmv/cur_cov) if cur_inc and cur_cov>0 else "–",
+                    f"GMV {lbl_prev}":   fmt_full(p_gmv) if p_gmv is not None else "–",
                     "GMV Δ":    chg_rr(c_gmv,  p_gmv,  cur_cov, cur_inc, prev_cov2, prev_inc2) if p_gmv  is not None else "–",
                     f"Orders {lbl_cur}": fmt_rr(c_ord,  cur_cov,  cur_inc,  lambda v: f"{int(v):,}"),
                     f"Orders {lbl_prev}":fmt_rr(p_ord,  prev_cov2,prev_inc2,lambda v: f"{int(v):,}") if p_ord  is not None else "–",
@@ -1908,8 +1909,8 @@ with tab_gmv:
                         else:
                             mom_str = "–"
 
-                        rr_str  = f" (RR {rr_val/1e3:.0f}K)" if is_inc else ""
-                        r[col_lbl] = f"{actual/1e3:.0f}K{rr_str}"
+                        rr_str  = f" (RR ฿{int(rr_val):,})" if is_inc else ""
+                        r[col_lbl] = f"฿{int(actual):,}{rr_str}"
                         r[f"{col_lbl} Δ"] = mom_str
                     display_rows.append(r)
 
@@ -1974,13 +1975,31 @@ with tab_gmv:
                     prev_mk_s = mk
                 ordered_cols += ["Total"]
                 sv_pivot = sv_pivot[ordered_cols]
-                # Convert to ฿ formatted strings for display
-                for _sc in sv_pivot_fmt.columns:
-                    if _sc != "Total":
-                        sv_pivot_fmt[_sc] = sv_pivot_fmt[_sc].apply(
-                            lambda x: f"฿{int(x):,}" if x > 0 else "–")
-                sv_pivot_fmt.index.name = "Service"
-                sv_pivot_fmt["Total"] = sv_pivot_fmt["Total"].apply(lambda x: f"฿{int(x):,}" if isinstance(x,(int,float)) else x)
+                # Build display df with GMV + RR + Δ columns
+                sv_disp = pd.DataFrame(index=sv_pivot.index)
+                sv_disp.index.name = "Service"
+                _prev_mk_svc = None
+                for _mk in all_mks_svc:
+                    _lbl   = idx_now.get(_mk,{}).get("label",_mk)
+                    _s_inf = idx_now.get(_mk,{}).get("stats",{})
+                    _cov   = _s_inf.get("coverage_pct",100)/100
+                    _inc   = not _s_inf.get("is_complete",True)
+                    sv_disp[_lbl] = sv_pivot[_mk].apply(lambda x: f"฿{int(x):,}" if x>0 else "–")
+                    if _inc and _cov > 0:
+                        sv_disp[f"RR {_lbl}"] = sv_pivot[_mk].apply(lambda x: f"฿{int(x/_cov):,}" if x>0 else "–")
+                    if _prev_mk_svc:
+                        _prev_lbl = idx_now.get(_prev_mk_svc,{}).get("label",_prev_mk_svc)
+                        _prev_cov = idx_now.get(_prev_mk_svc,{}).get("stats",{}).get("coverage_pct",100)/100
+                        _prev_inc = not idx_now.get(_prev_mk_svc,{}).get("stats",{}).get("is_complete",True)
+                        def _delta_row(row):
+                            c = row[_mk]; p = row[_prev_mk_svc]
+                            c_rr = c/_cov if _inc and _cov>0 and c>0 else c
+                            p_rr = p/_prev_cov if _prev_inc and _prev_cov>0 and p>0 else p
+                            if p_rr == 0: return "new" if c>0 else "–"
+                            return f"{(c_rr-p_rr)/p_rr*100:+.0f}%"
+                        sv_disp[f"{_lbl} Δ"] = sv_pivot.apply(_delta_row, axis=1)
+                    _prev_mk_svc = _mk
+                sv_disp["Total"] = sv_pivot["Total"].apply(lambda x: f"฿{int(x):,}" if x>0 else "–")
 
                 def css_svc_delta(v):
                     if not isinstance(v,str) or v in ["–","new"]: return "color:#aaa"
@@ -1991,9 +2010,10 @@ with tab_gmv:
                 delta_cols_svc = [c for c in ordered_cols if c.endswith(" Δ")]
                 styled_svc = sv_pivot.style.map(css_svc_delta, subset=delta_cols_svc)
                 styled_svc = styled_svc.set_properties(**{"font-size":"11px"})
-                # Use sv_pivot_fmt for display (strings) but sv_pivot for delta calc already done
-                st.dataframe(sv_pivot_fmt[ordered_cols].style.map(css_svc_delta, subset=delta_cols_svc).set_properties(**{"font-size":"11px"}),
-                             use_container_width=True, height=400)
+                delta_cols_svc2 = [c for c in sv_disp.columns if c.endswith(" Δ")]
+                styled_sv = sv_disp.style.map(css_svc_delta, subset=delta_cols_svc2)
+                styled_sv = styled_sv.set_properties(**{"font-size":"11px"})
+                st.dataframe(styled_sv, use_container_width=True, height=400)
 
         # ── Demographics Breakdown ──────────────────────────────────────────
         dm1, dm2 = st.columns([1,2])
