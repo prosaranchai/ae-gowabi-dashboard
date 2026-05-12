@@ -2812,55 +2812,30 @@ with tab_portfolio:
                 prev_cov = idx_now[pf_prev_mk]["stats"].get("coverage_pct",100)/100
                 prev_is_rr = not idx_now[pf_prev_mk]["stats"].get("is_complete",True)
 
-                # Normalize shop_id_s on both sides
-                def _norm_sid(v):
-                    s = str(v) if v is not None else ""
-                    return s.replace(".0","").strip()
+                # Merge cur and prev on organization_name (most reliable cross-month join)
+                prev_cols = ["organization_name","gmv","total_orders","avg_view","avg_cr","price_above",
+                             "health_score","sku_score","price_score","view_score","cvr_score",
+                             "alerts","priority","sku_count","category","shop_id_s"]
+                prev_cols = [c for c in prev_cols if c in prev_am.columns]
+                prev_rename = {c: f"{c}_prev" for c in prev_cols if c != "organization_name"}
+                prev_for_merge = prev_am[prev_cols].rename(columns=prev_rename).copy()
 
-                cur_am  = cur_am.copy()
-                prev_am = prev_am.copy()
-                if "shop_id_s" in cur_am.columns:
-                    cur_am["shop_id_s"]  = cur_am["shop_id_s"].apply(_norm_sid)
-                if "shop_id_s" in prev_am.columns:
-                    prev_am["shop_id_s"] = prev_am["shop_id_s"].apply(_norm_sid)
-
-                # Build prev_map with multiple key formats for robust lookup
-                prev_map = {}
-                if "shop_id_s" in prev_am.columns:
-                    for _, pr in prev_am.iterrows():
-                        raw = str(pr.get("shop_id_s",""))
-                        for key in [raw, raw.replace(".0","").strip(),
-                                    raw.strip(), str(int(float(raw))) if raw.replace(".","").isdigit() else raw]:
-                            if key and key not in prev_map:
-                                prev_map[key] = pr.to_dict()
-
-                # Also build by organization_name as fallback
-                prev_map_name = {}
-                if "organization_name" in prev_am.columns:
-                    for _, pr in prev_am.iterrows():
-                        nm = str(pr.get("organization_name","")).strip()
-                        if nm: prev_map_name[nm] = pr.to_dict()
+                merged = cur_am.merge(prev_for_merge, on="organization_name", how="left")
 
                 # Compute MoM metrics per shop
-                # Use organization_name as PRIMARY match key (most reliable cross-month)
                 rows = []
-                for _, r in cur_am.iterrows():
-                    name = str(r.get("organization_name","")).strip()
-                    sid  = _norm_sid(r.get("shop_id_s",""))
-                    # Primary: organization_name, Secondary: shop_id_s variants
-                    p = (prev_map_name.get(name) or
-                         prev_map.get(sid) or
-                         prev_map.get(str(r.get("shop_id_s",""))) or {})
+                for _, r in merged.iterrows():
 
                     # GMV with run rate
-                    cur_gmv  = r["gmv"] / cur_cov  if cur_is_rr  and cur_cov  > 0 else r["gmv"]
-                    prev_gmv = p.get("gmv",0) / prev_cov if prev_is_rr and prev_cov > 0 else p.get("gmv",0)
+                    cur_gmv  = float(r.get("gmv",0)) / cur_cov  if cur_is_rr  and cur_cov  > 0 else float(r.get("gmv",0))
+                    _p_gmv   = float(r.get("gmv_prev",0) or 0)
+                    prev_gmv = _p_gmv / prev_cov if prev_is_rr and prev_cov > 0 else _p_gmv
                     gmv_pct  = (cur_gmv-prev_gmv)/prev_gmv*100 if prev_gmv > 0 else None
 
                     # View MoM — use prev month view as fallback if cur month has no view data
                     _has_view = idx_now.get(pf_mk,{}).get("stats",{}).get("has_view_data", True)
-                    cur_view  = r.get("avg_view",0) / cur_cov  if cur_is_rr  else r.get("avg_view",0)
-                    prev_view = p.get("avg_view",0) / prev_cov if prev_is_rr else p.get("avg_view",0)
+                    cur_view  = float(r.get("avg_view",0) or 0) / cur_cov  if cur_is_rr  else float(r.get("avg_view",0) or 0)
+                    prev_view = float(r.get("avg_view_prev",0) or 0) / prev_cov if prev_is_rr else float(r.get("avg_view_prev",0) or 0)
                     if not _has_view and prev_view > 0:
                         # No view data for current month — show prev as reference
                         cur_view = None
@@ -2868,21 +2843,21 @@ with tab_portfolio:
 
                     # CVR MoM
                     _has_cr  = _has_view
-                    cur_cr   = r.get("avg_cr",0)
-                    prev_cr  = p.get("avg_cr",0)
+                    cur_cr   = float(r.get("avg_cr",0) or 0) if not (not _has_cr) else None
+                    prev_cr  = float(r.get("avg_cr_prev",0) or 0)
                     if not _has_cr:
                         cur_cr = None
                     cr_pct   = (cur_cr-prev_cr)/prev_cr*100 if (cur_cr and prev_cr > 0) else None
                     cr_pp    = (cur_cr - prev_cr) if (cur_cr is not None and prev_cr) else None
 
                     # Price: % SKUs cheaper (price_score improved = lower price_above)
-                    cur_pa   = r.get("price_above",0)
-                    prev_pa  = p.get("price_above",0)
+                    cur_pa   = float(r.get("price_above",0) or 0)
+                    prev_pa  = float(r.get("price_above_prev",0) or 0)
                     price_dir = "ถูกลง" if cur_pa < prev_pa else "แพงขึ้น" if cur_pa > prev_pa else "เท่าเดิม"
                     price_chg = prev_pa - cur_pa  # positive = cheaper
 
                     rows.append({
-                        "shop_id":      sid,
+                        "shop_id":      str(r.get("shop_id_s","")),
                         "name":         r["organization_name"],
                         "category":     r.get("category",""),
                         "cur_gmv":      int(cur_gmv),
@@ -2898,10 +2873,10 @@ with tab_portfolio:
                         "price_above":  cur_pa,
                         "price_chg":    price_chg,
                         "price_dir":    price_dir,
-                        "sku_count":    int(r.get("sku_count",0)),
-                        "health":       r.get("health_score",0),
-                        "priority":     r.get("priority",""),
-                        "alerts":       r.get("alerts",""),
+                        "sku_count":    int(float(r.get("sku_count",0) or 0)),
+                        "health":       float(r.get("health_score",0) or 0),
+                        "priority":     str(r.get("priority","") or ""),
+                        "alerts":       str(r.get("alerts","") or ""),
                     })
 
                 pf_df = pd.DataFrame(rows)
