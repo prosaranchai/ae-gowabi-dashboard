@@ -2837,6 +2837,11 @@ with tab_portfolio:
                 # Drop any duplicate columns from the merge
                 merged = merged[[c for c in merged.columns if not c.endswith("_dup")]]
 
+                # ── FIX: fill NaN in all _prev columns (unmatched shops get NaN after left join)
+                # NaN or 0 in Python returns NaN (truthy), so int(NaN) raises ValueError
+                for _pc in [c for c in merged.columns if c.endswith("_prev")]:
+                    merged[_pc] = pd.to_numeric(merged[_pc], errors="coerce").fillna(0)
+
                 # Compute MoM metrics per shop
                 rows = []
                 for _, r in merged.iterrows():
