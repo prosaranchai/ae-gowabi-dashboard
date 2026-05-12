@@ -2841,25 +2841,16 @@ with tab_portfolio:
                         nm = str(pr.get("organization_name","")).strip()
                         if nm: prev_map_name[nm] = pr.to_dict()
 
-                # DEBUG — show shop_id_s format from Supabase
-                with st.expander("🔧 Debug: shop_id_s format", expanded=False):
-                    sample_cur  = cur_am[["shop_id_s","organization_name","gmv"]].head(5).copy() if "shop_id_s" in cur_am.columns else pd.DataFrame()
-                    sample_prev = prev_am[["shop_id_s","organization_name","gmv"]].head(5).copy() if "shop_id_s" in prev_am.columns else pd.DataFrame()
-                    st.write("**May shops (sample):**", sample_cur)
-                    st.write("**Apr shops (sample):**", sample_prev)
-                    drj_cur  = cur_am[cur_am.get("organization_name","").str.contains("Dr.J", na=False)]  if "organization_name" in cur_am.columns else pd.DataFrame()
-                    drj_cur  = cur_am[cur_am["organization_name"].str.contains("Dr.J", na=False)] if "organization_name" in cur_am.columns else pd.DataFrame()
-                    drj_prev = prev_am[prev_am["organization_name"].str.contains("Dr.J", na=False)] if "organization_name" in prev_am.columns else pd.DataFrame()
-                    st.write("**Dr.J in May:**", drj_cur[["shop_id_s","organization_name","gmv"]].to_dict() if len(drj_cur) else "not found")
-                    st.write("**Dr.J in Apr:**", drj_prev[["shop_id_s","organization_name","gmv"]].to_dict() if len(drj_prev) else "not found")
-                    st.write("**prev_map keys sample:**", list(prev_map.keys())[:10])
-
                 # Compute MoM metrics per shop
+                # Use organization_name as PRIMARY match key (most reliable cross-month)
                 rows = []
                 for _, r in cur_am.iterrows():
-                    sid = _norm_sid(r.get("shop_id_s",""))
-                    # Try shop_id_s first, then organization_name as fallback
-                    p   = prev_map.get(sid) or prev_map.get(str(r.get("shop_id_s",""))) or                           prev_map_name.get(str(r.get("organization_name","")).strip()) or {}
+                    name = str(r.get("organization_name","")).strip()
+                    sid  = _norm_sid(r.get("shop_id_s",""))
+                    # Primary: organization_name, Secondary: shop_id_s variants
+                    p = (prev_map_name.get(name) or
+                         prev_map.get(sid) or
+                         prev_map.get(str(r.get("shop_id_s",""))) or {})
 
                     # GMV with run rate
                     cur_gmv  = r["gmv"] / cur_cov  if cur_is_rr  and cur_cov  > 0 else r["gmv"]
@@ -3091,12 +3082,9 @@ with tab_portfolio:
                         f'color:{title_color};margin-bottom:10px">{title}</div>',
                         unsafe_allow_html=True
                     )
-                    # Sort by RR GMV desc within the top10
+                    # Sort by RR GMV desc — cur_gmv already RR-adjusted in rows building
                     df = df.copy()
-                    _cov_sort = pf_cov if pf_cov > 0 else 1.0
                     df["_sort_gmv"] = pd.to_numeric(df["cur_gmv"], errors="coerce").fillna(0)
-                    if pf_is_rr:
-                        df["_sort_gmv"] = df["_sort_gmv"] / _cov_sort
                     df = df.sort_values("_sort_gmv", ascending=False)
                     for rank, (_, row) in enumerate(df.iterrows(), 1):
                         comment = gen_comment(row, is_growth=is_growth)
