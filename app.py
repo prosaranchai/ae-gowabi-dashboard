@@ -799,7 +799,7 @@ def sc(v): return "#E24B4A" if v<40 else "#EF9F27" if v<60 else "#639922"
 def fmt_gmv(v, rr=False):
     try: v = float(v)
     except: return "–"
-    s = f"฿{v/1e6:.1f}M" if v>=1e6 else f"฿{v/1e3:.0f}K" if v>=1e3 else f"฿{int(v)}"
+    s = f"฿{int(v):,}"
     if rr: s += " (RR)"
     return s
 def to_csv(df): return df.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig")
@@ -1724,7 +1724,10 @@ with tab_ov:
                         return "color:#d94040;font-weight:500" if f2 < 0 else "color:#3a7d2c;font-weight:500" if f2 > 0 else "color:#aaa"
                     except: return ""
 
-                styled_drill = tbl_drill.style.map(css_score2, subset=["Score"])
+                subset_cols = [c for c in ["Score","MoM%"] if c in tbl_drill.columns]
+                styled_drill = tbl_drill.style
+                if "Score" in tbl_drill.columns:
+                    styled_drill = styled_drill.map(css_score2, subset=["Score"])
                 if "MoM%" in tbl_drill.columns:
                     styled_drill = styled_drill.map(css_pct2, subset=["MoM%"])
                 styled_drill = styled_drill.set_properties(**{"font-size":"12px"})
@@ -1932,7 +1935,7 @@ with tab_gmv:
                 st.dataframe(styled_tp, use_container_width=True, height=420)
 
         with col4:
-            st.markdown('<div class="section-title">All Services — GMV by Month (฿K)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">All Services — GMV by Month</div>', unsafe_allow_html=True)
             if len(trend_svc):
                 sv = trend_svc.copy()
                 sv["gmv"] = pd.to_numeric(sv["gmv"], errors="coerce").fillna(0)
@@ -1948,10 +1951,10 @@ with tab_gmv:
                         sv_pivot[mk] = 0
                 sv_pivot = sv_pivot[all_mks_svc]
                 sv_pivot["Total"] = sv_pivot.sum(axis=1)
-                # Filter out services with 0 total
                 sv_pivot = sv_pivot[sv_pivot["Total"] > 0]
                 sv_pivot = sv_pivot.sort_values("Total", ascending=False)
-                sv_pivot = (sv_pivot / 1e3).round(1)
+                # Format as full ฿ strings (not K)
+                sv_pivot_fmt = sv_pivot.copy()
                 # Rename month columns + add Δ
                 ordered_cols = []
                 prev_mk_s = None
@@ -1971,7 +1974,13 @@ with tab_gmv:
                     prev_mk_s = mk
                 ordered_cols += ["Total"]
                 sv_pivot = sv_pivot[ordered_cols]
-                sv_pivot.index.name = "Service"
+                # Convert to ฿ formatted strings for display
+                for _sc in sv_pivot_fmt.columns:
+                    if _sc != "Total":
+                        sv_pivot_fmt[_sc] = sv_pivot_fmt[_sc].apply(
+                            lambda x: f"฿{int(x):,}" if x > 0 else "–")
+                sv_pivot_fmt.index.name = "Service"
+                sv_pivot_fmt["Total"] = sv_pivot_fmt["Total"].apply(lambda x: f"฿{int(x):,}" if isinstance(x,(int,float)) else x)
 
                 def css_svc_delta(v):
                     if not isinstance(v,str) or v in ["–","new"]: return "color:#aaa"
@@ -1982,7 +1991,9 @@ with tab_gmv:
                 delta_cols_svc = [c for c in ordered_cols if c.endswith(" Δ")]
                 styled_svc = sv_pivot.style.map(css_svc_delta, subset=delta_cols_svc)
                 styled_svc = styled_svc.set_properties(**{"font-size":"11px"})
-                st.dataframe(styled_svc, use_container_width=True, height=400)
+                # Use sv_pivot_fmt for display (strings) but sv_pivot for delta calc already done
+                st.dataframe(sv_pivot_fmt[ordered_cols].style.map(css_svc_delta, subset=delta_cols_svc).set_properties(**{"font-size":"11px"}),
+                             use_container_width=True, height=400)
 
         # ── Demographics Breakdown ──────────────────────────────────────────
         dm1, dm2 = st.columns([1,2])
@@ -2796,10 +2807,11 @@ with tab_portfolio:
                     prev_view = p.get("avg_view",0) / prev_cov if prev_is_rr else p.get("avg_view",0)
                     view_pct  = (cur_view-prev_view)/prev_view*100 if prev_view > 0 else None
 
-                    # CVR MoM
+                    # CVR MoM — show as PP (percentage points)
                     cur_cr   = r.get("avg_cr",0)
                     prev_cr  = p.get("avg_cr",0)
                     cr_pct   = (cur_cr-prev_cr)/prev_cr*100 if prev_cr > 0 else None
+                    cr_pp    = cur_cr - prev_cr  # absolute PP difference
 
                     # Price: % SKUs cheaper (price_score improved = lower price_above)
                     cur_pa   = r.get("price_above",0)
@@ -2818,6 +2830,7 @@ with tab_portfolio:
                         "view_pct":     view_pct,
                         "cur_cr":       cur_cr,
                         "cr_pct":       cr_pct,
+                        "cr_pp":        cr_pp,
                         "price_above":  cur_pa,
                         "price_chg":    price_chg,
                         "price_dir":    price_dir,
@@ -2830,8 +2843,12 @@ with tab_portfolio:
                 pf_df = pd.DataFrame(rows)
                 pf_df_valid = pf_df[pf_df["prev_gmv"] > 0].copy()
 
-                top10_growth = pf_df_valid.nlargest(10,"gmv_pct")
-                top10_drop   = pf_df_valid.nsmallest(10,"gmv_pct")
+                # Sort by absolute ฿ change (RR-adjusted)
+                _pf_cov3  = pf_cov if pf_cov > 0 else 1.0
+                pf_df_valid["gmv_rr"]      = pf_df_valid["cur_gmv"] / _pf_cov3 if pf_is_rr else pf_df_valid["cur_gmv"]
+                pf_df_valid["gmv_abs_chg"] = pf_df_valid["gmv_rr"] - pf_df_valid["prev_gmv"]
+                top10_growth = pf_df_valid.nlargest(10,  "gmv_abs_chg")
+                top10_drop   = pf_df_valid.nsmallest(10, "gmv_abs_chg")
 
                 # ── Load service-level data for SKU breakdown ─────────────────
                 cur_svc_df  = pd.DataFrame((pf_cur  or {}).get("svc_perf", []))
@@ -2873,64 +2890,93 @@ with tab_portfolio:
                             "p_sell_min":p_sell_min,  "p_sell_max":p_sell_max,
                             "orders":    c_ord,
                             "is_new":    p_gmv == 0 and c_gmv > 0,
+                            "price_up":  (not (p_gmv == 0 and c_gmv > 0)) and p_sell_min > 0 and c_sell_min > p_sell_min,
                         })
                     rows.sort(key=lambda x: abs(x["c_gmv"]-x["p_gmv"]), reverse=True)
-                    return rows[:n]
+                    return rows  # return all, caller slices
 
-                def render_sku_breakdown(skus):
+                def render_sku_breakdown(skus, is_growth=True):
                     if not skus: return ""
-                    lines = []
-                    for s in skus:
-                        name  = s["svc"][:40] + ("…" if len(s["svc"])>40 else "")
+                    # Split into growing vs declining services
+                    growing  = sorted([s for s in skus if s["c_gmv"]-s["p_gmv"] > 0],  key=lambda x: -(x["c_gmv"]-x["p_gmv"]))
+                    dropping = sorted([s for s in skus if s["c_gmv"]-s["p_gmv"] < 0],  key=lambda x: x["c_gmv"]-x["p_gmv"])
+                    new_svcs = [s for s in skus if s["is_new"] and s["c_gmv"] > 0]
+
+                    def svc_row(s, show_sign=True):
+                        name  = s["svc"][:38] + ("…" if len(s["svc"])>38 else "")
                         gd    = s["c_gmv"] - s["p_gmv"]
                         pd_   = s["c_sell"] - s["p_sell"]
                         g_col = "#16A34A" if gd >= 0 else "#DC2626"
                         g_sym = "▲" if gd >= 0 else "▼"
-                        g_str = f"{g_sym}฿{abs(int(gd)):,}"
+                        g_str = f"{g_sym}฿{abs(int(gd)):,}" if not s["is_new"] else f"฿{int(s['c_gmv']):,}"
                         p_str = ""
-                        # Show price change only if: existing service + price actually changed + non-zero
-                        is_existing = not s["is_new"] and s["p_sell"] > 0
-                        if is_existing and int(pd_) != 0:
-                            p_col = "#DC2626" if pd_ > 0 else "#16A34A"
-                            p_sym = "▲" if pd_ > 0 else "▼"
-                            p_str = f'<span style="color:{p_col};font-size:9px;margin-left:4px">ราคา {p_sym}฿{abs(int(pd_)):,}</span>'
-                        new_badge = ' <span style="font-size:8px;background:#EFF6FF;color:#2563EB;padding:1px 4px;border-radius:2px">NEW</span>' if s["is_new"] else ""
-                        # Hide row if GMV change is 0 (nothing to show)
-                        if int(gd) == 0 and not s["is_new"]:
-                            continue
-                        lines.append(
-                            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                            f'padding:3px 0;border-bottom:1px solid #f5f5f5;font-size:10px">'
-                            f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{name}{new_badge}</span>'
-                            f'<span style="color:{g_col};font-weight:600;white-space:nowrap;margin-left:8px">{g_str}</span>'
-                            f'{p_str}</div>'
-                        )
-                    return (
-                        '<div style="margin-top:6px;padding:8px 10px;background:#F8FAFF;'
-                        'border-radius:6px;border:1px solid #E8F0FE">'
-                        '<div style="font-size:9px;font-weight:600;color:#3B8BD4;text-transform:uppercase;'
-                        'letter-spacing:.06em;margin-bottom:4px">Service Breakdown</div>'
-                        + "".join(lines) + '</div>'
-                    )
+                        is_ex = not s["is_new"] and s["p_sell"] > 0
+                        if is_ex and int(pd_) != 0:
+                            p_col = "#DC2626" if pd_>0 else "#16A34A"
+                            p_sym = "▲" if pd_>0 else "▼"
+                            p_str = f'<span style="color:{p_col};font-size:9px;margin-left:4px">{p_sym}฿{abs(int(pd_)):,}</span>'
+                        new_b = ' <span style="font-size:8px;background:#EFF6FF;color:#2563EB;padding:1px 4px;border-radius:2px">NEW</span>' if s["is_new"] else ""
+                        return (f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                                f'padding:3px 0;border-bottom:1px solid #f5f5f5;font-size:10px">'
+                                f'<span style="color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{name}{new_b}</span>'
+                                f'<span style="color:{g_col};font-weight:600;white-space:nowrap;margin-left:8px">{g_str}</span>'
+                                f'{p_str}</div>')
+
+                    html = '<div style="margin-top:6px;padding:8px 10px;background:#F8FAFF;border-radius:6px;border:1px solid #E8F0FE">'
+                    html += '<div style="font-size:9px;font-weight:600;color:#3B8BD4;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Service Breakdown</div>'
+
+                    if growing[:3]:
+                        html += '<div style="font-size:9px;color:#16A34A;font-weight:600;margin:4px 0 2px">📈 ขายดีขึ้น</div>'
+                        html += "".join(svc_row(s) for s in growing[:3])
+                    if new_svcs[:2]:
+                        html += '<div style="font-size:9px;color:#2563EB;font-weight:600;margin:4px 0 2px">✨ Service ใหม่</div>'
+                        html += "".join(svc_row(s) for s in new_svcs[:2])
+                    if dropping[:3]:
+                        html += '<div style="font-size:9px;color:#DC2626;font-weight:600;margin:4px 0 2px">📉 ขายแย่ลง</div>'
+                        html += "".join(svc_row(s) for s in dropping[:3])
+
+                    html += '</div>'
+                    return html
 
                 # ── Generate auto-comment ─────────────────────────────────────
-                def gen_comment(row):
+                def gen_comment(row, is_growth=True):
                     tips = []
-                    g = row["gmv_pct"]
-                    if g is not None:
-                        if g >= 20:   tips.append("GMV โตดี — รักษา momentum")
-                        elif g < -20: tips.append("GMV ลดมาก — ตรวจสอบด่วน")
-                    if row["view_pct"] is not None and row["view_pct"] < -15:
-                        tips.append(f"View ลด {abs(row['view_pct']):.0f}% — เพิ่มรูป/content")
-                    if row["cr_pct"] is not None and row["cr_pct"] < -15:
-                        tips.append(f"CVR ลด {abs(row['cr_pct']):.0f}% — ตรวจ listing/ราคา")
-                    if row["price_above"] > 30:
-                        tips.append(f"ราคาสูงกว่า floor +{row['price_above']:.0f}% — ปรับราคา")
-                    if row["sku_count"] <= 1:
-                        tips.append("Single SKU — เพิ่ม service")
-                    if not tips:
-                        if g is not None and g >= 0: tips.append("ทรงตัวดี")
-                        else: tips.append("ติดตาม")
+                    g    = row.get("gmv_pct")
+                    vp   = row.get("view_pct")
+                    crp  = row.get("cr_pct")
+                    pa   = row.get("price_above",0)
+                    skus = row.get("sku_count",0)
+                    abs_chg = row.get("gmv_abs_chg",0)
+
+                    if is_growth:
+                        # Explain WHY it grew
+                        drivers = []
+                        if vp is not None and vp > 15:
+                            drivers.append(f"View ▲{vp:.0f}%")
+                        if crp is not None and crp > 15:
+                            drivers.append(f"CVR ▲{crp:.0f}%")
+                        if pa < 10:
+                            drivers.append("ราคาแข่งได้")
+                        if drivers:
+                            tips.append("เติบโตจาก: " + " + ".join(drivers))
+                        else:
+                            tips.append("New service หรือ promo — ตรวจ service breakdown")
+                        if pa > 30:
+                            tips.append(f"⚠️ ราคายังสูงกว่า floor +{pa:.0f}%")
+                        if skus <= 1:
+                            tips.append("⚠️ Single SKU — เพิ่ม service เพื่อรักษา")
+                    else:
+                        # Explain WHY it dropped
+                        if vp is not None and vp < -15:
+                            tips.append(f"View ▼{abs(vp):.0f}% — เพิ่มรูป/content")
+                        if crp is not None and crp < -15:
+                            tips.append(f"CVR ▼{abs(crp):.0f}% — ตรวจ listing/ราคา")
+                        if pa > 30:
+                            tips.append(f"ราคาสูง +{pa:.0f}% vs floor")
+                        if skus <= 1:
+                            tips.append("Single SKU — เพิ่ม service")
+                        if not tips:
+                            tips.append("ตรวจ service breakdown")
                     return " · ".join(tips[:3])
 
                 # ── Render card helper ────────────────────────────────────────
@@ -2940,14 +2986,14 @@ with tab_portfolio:
                     arrow = "▲" if v>=0 else "▼"
                     return f'<span style="color:{color};font-weight:600">{arrow}{abs(v):.0f}%</span>'
 
-                def render_table(df, title, title_color):
+                def render_table(df, title, title_color, is_growth=True):
                     st.markdown(
                         f'<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;'
                         f'color:{title_color};margin-bottom:10px">{title}</div>',
                         unsafe_allow_html=True
                     )
                     for rank, (_, row) in enumerate(df.iterrows(), 1):
-                        comment = gen_comment(row)
+                        comment = gen_comment(row, is_growth=is_growth)
                         pri_bg  = "#FEF2F2" if row["priority"]=="critical" else "#FFFBEB" if row["priority"]=="warning" else "#F0FDF4"
                         pri_c   = "#DC2626"  if row["priority"]=="critical" else "#D97706"  if row["priority"]=="warning" else "#16A34A"
                         health_c = sc(row["health"])
@@ -2958,8 +3004,24 @@ with tab_portfolio:
                         price_color = "#DC2626" if row["price_above"]>30 else "#D97706" if row["price_above"]>15 else "#16A34A"
                         price_str   = f'+{row["price_above"]:.0f}%' if row["price_above"]>0 else "✓ ดี"
 
-                        skus     = get_sku_breakdown(row.get("shop_id",""))
-                        sku_html = render_sku_breakdown(skus)
+                        all_skus  = get_sku_breakdown(row.get("shop_id",""))
+                        skus      = all_skus[:5]
+                        sku_html  = render_sku_breakdown(skus, is_growth=is_growth)
+
+                        # % SKUs more expensive than last month
+                        existing_skus = [s for s in all_skus if not s["is_new"] and s["p_sell"] > 0]
+                        n_total   = len(existing_skus)
+                        n_up      = sum(1 for s in existing_skus if s["price_up"])
+                        if n_total > 0:
+                            pct_up    = n_up / n_total * 100
+                            if pct_up >= 50:
+                                price_sku_str = f'<div style="font-size:9px;color:#DC2626;margin-top:2px">{n_up}/{n_total} SKUs แพงขึ้น ({pct_up:.0f}%)</div>'
+                            elif pct_up > 0:
+                                price_sku_str = f'<div style="font-size:9px;color:#D97706;margin-top:2px">{n_up}/{n_total} SKUs แพงขึ้น ({pct_up:.0f}%)</div>'
+                            else:
+                                price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">ราคาไม่เพิ่มขึ้น</div>'
+                        else:
+                            price_sku_str = ""
                         st.markdown(f"""
 <div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:8px;page-break-inside:avoid">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -2988,12 +3050,15 @@ with tab_portfolio:
     <div style="background:#fafafa;border-radius:6px;padding:7px 10px;text-align:center">
       <div style="font-size:9px;color:#bbb;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Conversion</div>
       <div style="font-size:14px">{cr_str}</div>
-      <div style="font-size:9px">{arrow_pct(row["cr_pct"])}</div>
+      <div style="font-size:9px">{(lambda pp, pct:
+          f'<span style="color:{"#16A34A" if pp>=0 else "#DC2626"};font-weight:500">{"▲" if pp>=0 else "▼"}{abs(pp):.2f} pp</span>'
+          if pp is not None else '<span style="color:#ccc">–</span>'
+      )(row.get("cr_pp"), row.get("cr_pct"))}</div>
     </div>
     <div style="background:#fafafa;border-radius:6px;padding:7px 10px;text-align:center">
       <div style="font-size:9px;color:#bbb;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Price vs Floor</div>
       <div style="font-size:14px;color:{price_color};font-weight:600">{price_str}</div>
-      <div style="font-size:9px;color:#aaa">{row["sku_count"]} SKUs</div>
+
     </div>
   </div>
   <div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 4px 4px 0;padding:6px 10px;font-size:11px;color:#555">
@@ -3029,7 +3094,7 @@ with tab_portfolio:
                 with col_g:
                     render_table(top10_growth, "🟢 Top 10 Growth MoM", "#16A34A")
                 with col_d:
-                    render_table(top10_drop,   "🔴 Top 10 Drop MoM",   "#DC2626")
+                    render_table(top10_drop,   "🔴 Top 10 Drop MoM",   "#DC2626", is_growth=False)
 
                 # ── Screenshot tip ────────────────────────────────────────────
                 st.markdown("---")
