@@ -206,7 +206,7 @@ REAL_AMS = {
 }
 EXCLUDED  = {"cancelled","refunded","expired","no_show"}
 PILLAR_COLS  = ["sku_score","price_score","view_score","cvr_score"]
-PILLAR_NAMES = ["SKU Quality","Price","View MoM","CVR MoM"]
+PILLAR_NAMES = ["Price","View MoM","CVR MoM"]
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 # ─── Supabase ─────────────────────────────────────────────────────────────────
@@ -492,15 +492,20 @@ def process_raw(file_bytes: bytes, view_bytes: bytes | None = None) -> dict:
         if use_real and prev_view_mk:
             prev_view_data = view_map_by_month.get(prev_view_mk, {})
             cur_view_data  = view_map_by_month.get(mkey, {})
+            # Run rate coverage for current month — scale up partial month
+            _cov = rr["coverage"] / 100 if rr["coverage"] > 0 else 1.0
+            _is_partial = not rr["is_complete"]
             def view_mom_score(shop_id):
-                cur  = cur_view_data.get(shop_id,  {}).get("view", 0)
-                prev = prev_view_data.get(shop_id, {}).get("view", 0)
+                cur_raw = cur_view_data.get(shop_id,  {}).get("view", 0)
+                prev    = prev_view_data.get(shop_id, {}).get("view", 0)
+                # Apply run rate to current month view
+                cur = cur_raw / _cov if _is_partial and _cov > 0 and cur_raw > 0 else cur_raw
                 if prev <= 0 and cur <= 0: return 50.0
-                if prev <= 0: return 75.0   # new shop with views
+                if prev <= 0: return 75.0
                 pct = (cur - prev) / prev * 100
-                # Map: -50% → 0, 0% → 50, +50% → 100 (clipped)
                 return float(np.clip(50 + pct, 0, 100))
             def cvr_mom_score(shop_id):
+                # CVR is a rate — no run rate needed
                 cur  = cur_view_data.get(shop_id,  {}).get("cr", 0)
                 prev = prev_view_data.get(shop_id, {}).get("cr", 0)
                 if prev <= 0 and cur <= 0: return 50.0
@@ -1481,30 +1486,25 @@ with tab_ov:
     st.markdown('<div class="section-title">4 Pillar Scores — คลิกเพื่อดูร้านที่ต้องแก้</div>', unsafe_allow_html=True)
 
     PILLAR_META = [
-        {"name": "SKU Quality", "score_col": "sku_score",   "am_key": "avg_sku",
-         "desc": "ร้านที่มี SKU น้อยกว่า category",
-         "detail_cols": ["organization_name","kam","category","sku_count","sku_score"],
-         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","sku_count":"SKUs","sku_score":"Score"},
-         "sort_asc": True, "threshold": 40},
         {"name": "Price",       "score_col": "price_score", "am_key": "avg_price",
          "desc": "ร้านที่ราคาสูงกว่า lowest 12m",
          "detail_cols": ["organization_name","kam","category","selling_price_mean","lowest_price_12m","price_above","price_score"],
          "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","selling_price_mean":"Selling","lowest_price_12m":"Lowest 12m","price_above":"Above%","price_score":"Score"},
-         "sort_asc": True, "threshold": 50, "use_svc_level": True},
+         "sort_asc": True, "threshold": 50, "use_svc_level": True, "add_prev_price": True},
         {"name": "View MoM",   "score_col": "view_score",  "am_key": "avg_view",
          "desc": "ร้านที่ view ลดลงจากเดือนก่อน",
-         "detail_cols": ["organization_name","kam","category","avg_view","view_mom_pct","view_score"],
-         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_view":"Views/mo","view_mom_pct":"MoM%","view_score":"Score"},
+         "detail_cols": ["organization_name","kam","category","avg_view","view_mom_pct"],
+         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_view":"View (RR)","view_mom_pct":"MoM%"},
          "sort_asc": True, "threshold": 40, "use_mom_compare": True},
         {"name": "CVR MoM",    "score_col": "cvr_score",   "am_key": "avg_cvr",
          "desc": "ร้านที่ conversion rate ลดลง",
-         "detail_cols": ["organization_name","kam","category","avg_cr","cvr_mom_pct","cvr_score"],
-         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_cr":"CR%","cvr_mom_pct":"MoM%","cvr_score":"Score"},
+         "detail_cols": ["organization_name","kam","category","avg_cr","cvr_mom_pct"],
+         "detail_labels": {"organization_name":"Shop","kam":"AM","category":"Category","avg_cr":"CVR (now)","cvr_mom_pct":"MoM%"},
          "sort_asc": True, "threshold": 40, "use_mom_compare": True},
     ]
 
     sel_pillar = st.session_state.get("sel_pillar_ov", None)
-    pcols = st.columns(4)
+    pcols = st.columns(3)
 
     for col, pm in zip(pcols, PILLAR_META):
         avg   = am_src_ov[pm["am_key"]].mean() if len(am_src_ov) else 0
@@ -1586,15 +1586,30 @@ with tab_ov:
                         st.download_button("⬇ overpriced_services.csv", to_csv(svc_df),
                                            f"price_services_{ov_mk}.csv", "text/csv")
                     else:
-                        # Shop level (original)
+                        # Shop level — add prev month price
                         available_cols = [c for c in pm["detail_cols"] if c in drill.columns]
                         tbl_drill = drill[available_cols].rename(columns=pm["detail_labels"]).copy()
-                        tbl_drill["Selling"]    = tbl_drill["Selling"].apply(lambda x: f"฿{x:,.0f}")
-                        tbl_drill["Lowest 12m"] = tbl_drill["Lowest 12m"].apply(lambda x: f"฿{x:,.0f}")
-                        tbl_drill["Above%"]     = tbl_drill["Above%"].apply(lambda x: f"+{x:.0f}%")
-                        tbl_drill["Score"]      = tbl_drill["Score"].apply(lambda x: f"{int(x)}")
-                        styled_drill = (tbl_drill.style
-                            .set_properties(**{"font-size":"12px"}))
+
+                        # Add prev month selling price
+                        if ov_prev:
+                            prev_sh_price = load_month_data(ov_prev)
+                            if prev_sh_price:
+                                prev_sh_df2 = pd.DataFrame(prev_sh_price.get("shops",[]))
+                                if len(prev_sh_df2) and "selling_price_mean" in prev_sh_df2.columns:
+                                    prev_price_map = prev_sh_df2.set_index("shop_id_s")["selling_price_mean"].to_dict()
+                                    prev_lbl_price = idx_now[ov_prev]["label"]
+                                    tbl_drill.insert(
+                                        list(tbl_drill.columns).index("Selling")+1,
+                                        f"Prev ({prev_lbl_price})",
+                                        drill["shop_id_s"].map(lambda x: f"฿{prev_price_map.get(str(x),0):,.0f}")
+                                    )
+
+                        tbl_drill["Selling"]    = tbl_drill["Selling"].apply(lambda x: f"฿{x:,.0f}" if isinstance(x,(int,float)) else x)
+                        tbl_drill["Lowest 12m"] = tbl_drill["Lowest 12m"].apply(lambda x: f"฿{x:,.0f}" if isinstance(x,(int,float)) else x)
+                        tbl_drill["Above%"]     = tbl_drill["Above%"].apply(lambda x: f"+{x:.0f}%" if isinstance(x,(int,float)) else x)
+                        if "Score" in tbl_drill.columns:
+                            tbl_drill["Score"]  = tbl_drill["Score"].apply(lambda x: f"{int(x)}" if isinstance(x,(int,float)) else x)
+                        styled_drill = tbl_drill.style.set_properties(**{"font-size":"12px"})
                         st.dataframe(styled_drill, use_container_width=True,
                                      height=min(400, 40 + len(tbl_drill)*36))
                         st.download_button("⬇ price_shops.csv", to_csv(drill[available_cols]),
@@ -1677,8 +1692,18 @@ with tab_ov:
                         tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x)}" if isinstance(x,(int,float)) and str(x) not in ['nan'] else x)
                     elif c == "SKUs":
                         tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x):,}" if isinstance(x,(int,float)) else x)
-                    elif c == "Views/mo":
-                        tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{int(x):,}" if isinstance(x,(int,float)) else x)
+                    elif c in ["View (RR)","Views/mo"]:
+                        # Apply run rate if current month is incomplete
+                        _dcov = idx_now.get(ov_mk,{}).get("stats",{}).get("coverage_pct",100)/100
+                        _dinc = not idx_now.get(ov_mk,{}).get("stats",{}).get("is_complete",True)
+                        def _fmt_view_rr(v):
+                            try:
+                                raw = float(v)
+                                if _dinc and _dcov>0 and raw>0:
+                                    return f"{int(raw):,} (RR {int(raw/_dcov):,})"
+                                return f"{int(raw):,}"
+                            except: return str(v)
+                        tbl_drill[c] = tbl_drill[c].apply(_fmt_view_rr)
                     elif c == "MoM%":
                         tbl_drill[c] = tbl_drill[c].apply(lambda x: f"{x:+.0f}%" if isinstance(x,(int,float)) else x)
                     elif c == "CR%":
@@ -1753,15 +1778,22 @@ with tab_gmv:
             ]
             shop_names = ", ".join(gmv_shop_filt[:2]) + ("…" if len(gmv_shop_filt)>2 else "")
             gmv_title  = f"GMV — {shop_names} รายเดือน (฿M)"
-        elif gmv_am_filt != "ทั้งหมด" and len(trend_kam):
-            # KAM filter only
-            km_filt = trend_kam[trend_kam["kam"]==gmv_am_filt]
-            km_map  = km_filt.set_index("month")["gmv"].to_dict()
-            all_gmv    = [km_map.get(m, 0) for m in all_months]
+        elif gmv_am_filt != "ทั้งหมด":
+            # KAM filter — load from per-month Supabase data for accuracy
+            with st.spinner(f"โหลด GMV {gmv_am_filt}…"):
+                km_gmv_map = {}
+                for _mk in all_months:
+                    _md = load_month_data(_mk)
+                    if _md:
+                        _am_df = pd.DataFrame(_md.get("am",[]))
+                        if len(_am_df):
+                            _row = _am_df[_am_df["kam"]==gmv_am_filt]
+                            km_gmv_map[_mk] = float(_row["gmv"].sum()) if len(_row) else 0
+            all_gmv    = [km_gmv_map.get(m, 0) for m in all_months]
             all_rr_gmv = [
-                int(km_map.get(m,0) / max(idx_now[m]["stats"].get("coverage_pct",100)/100, 0.01))
-                if not idx_now[m]["stats"].get("is_complete", True) else km_map.get(m,0)
-                for m in all_months
+                int(v / max(idx_now[m]["stats"].get("coverage_pct",100)/100, 0.01))
+                if not idx_now[m]["stats"].get("is_complete", True) else int(v)
+                for m, v in zip(all_months, all_gmv)
             ]
             gmv_title = f"GMV {gmv_am_filt} รายเดือน (฿M)"
         else:
@@ -1911,8 +1943,10 @@ with tab_gmv:
                         sv_pivot[mk] = 0
                 sv_pivot = sv_pivot[all_mks_svc]
                 sv_pivot["Total"] = sv_pivot.sum(axis=1)
+                # Filter out services with 0 total
+                sv_pivot = sv_pivot[sv_pivot["Total"] > 0]
                 sv_pivot = sv_pivot.sort_values("Total", ascending=False)
-                sv_pivot = (sv_pivot / 1e3).round(0)
+                sv_pivot = (sv_pivot / 1e3).round(1)
                 # Rename month columns + add Δ
                 ordered_cols = []
                 prev_mk_s = None
@@ -2060,124 +2094,198 @@ with tab_gmv:
 
 # ══ TAB 2: Category ════════════════════════════════════════════════════════════
 with tab_cat:
-    # ── Filters ────────────────────────────────────────────────────────────
-    cf1, cf2 = st.columns(2)
+    # ── Filters ─────────────────────────────────────────────────────────────
+    cf1, cf2, cf3 = st.columns(3)
     with cf1:
         cat_am_filt = st.selectbox("Filter by KAM", ["ทั้งหมด"]+sorted(REAL_AMS), key="cat_am")
     with cf2:
-        # Month filter from available periods
         all_months_cat = sorted(idx_now.keys())
         month_opts_cat = ["ทุกเดือน"] + [idx_now[m]["label"] for m in all_months_cat]
         cat_month_filt = st.selectbox("Filter by Month", month_opts_cat, key="cat_month",
-                                      index=len(month_opts_cat)-1)  # default = latest
+                                      index=len(month_opts_cat)-1)
+    with cf3:
+        cat_filter_cat = st.selectbox("Filter by Category", ["ทั้งหมด"], key="cat_cat_filt",
+                                       disabled=True)  # populated below
 
-    # Resolve selected month key
+    # Resolve month key
     sel_month_cat = None
-    if cat_month_filt != "ทุกเดือน":
-        for mk in all_months_cat:
-            if idx_now[mk]["label"] == cat_month_filt:
-                sel_month_cat = mk; break
+    for mk in all_months_cat:
+        if idx_now[mk]["label"] == cat_month_filt:
+            sel_month_cat = mk; break
 
-    # Load category data for selected month
-    if sel_month_cat:
-        mdata_cat  = load_month_data(sel_month_cat) or mdata
+    # Load month data
+    mdata_cat = load_month_data(sel_month_cat) if sel_month_cat else mdata
+
+    # Build category GMV from svc_perf (supports KAM filter properly)
+    svc_cat_data = pd.DataFrame((mdata_cat or {}).get("svc_perf", []))
+    if len(svc_cat_data) and cat_am_filt != "ทั้งหมด":
+        svc_cat_data = svc_cat_data[svc_cat_data["kam"] == cat_am_filt]
+
+    # Build prev month data for comparison
+    prev_cat_mk   = all_months_cat[all_months_cat.index(sel_month_cat)-1] if sel_month_cat and all_months_cat.index(sel_month_cat)>0 else None
+    prev_cat_data = pd.DataFrame((load_month_data(prev_cat_mk) or {}).get("svc_perf",[])) if prev_cat_mk else pd.DataFrame()
+    if len(prev_cat_data) and cat_am_filt != "ทั้งหมด":
+        prev_cat_data = prev_cat_data[prev_cat_data["kam"] == cat_am_filt]
+    prev_cat_lbl  = idx_now[prev_cat_mk]["label"] if prev_cat_mk else None
+
+    if len(svc_cat_data):
+        cat_summary = svc_cat_data.groupby("category").agg(
+            gmv=("gmv","sum"), orders=("orders","sum")
+        ).reset_index().sort_values("gmv", ascending=False)
+        total_gmv_cat = cat_summary["gmv"].sum()
+        cat_summary["GMV"]       = cat_summary["gmv"].apply(fmt_gmv)
+        cat_summary["Share%"]    = (cat_summary["gmv"]/total_gmv_cat*100).round(1).apply(lambda x: f"{x:.1f}%")
+
+        if len(prev_cat_data):
+            prev_cat_sum = prev_cat_data.groupby("category")["gmv"].sum().to_dict()
+            cat_summary["Prev GMV"]  = cat_summary["category"].map(lambda c: fmt_gmv(prev_cat_sum.get(c,0)))
+            cat_summary["MoM%"]      = cat_summary.apply(
+                lambda r: f"{(r['gmv']-prev_cat_sum.get(r['category'],0))/prev_cat_sum.get(r['category'],1)*100:+.0f}%"
+                if prev_cat_sum.get(r["category"],0)>0 else "new", axis=1)
+            show_cols_cat = ["category","GMV","Share%","Prev GMV","MoM%","orders"]
+        else:
+            show_cols_cat = ["category","GMV","Share%","orders"]
+
+        lbl_suffix = f" · {cat_am_filt}" if cat_am_filt!="ทั้งหมด" else ""
+        st.markdown(f'<div class="section-title">Category Overview — {cat_month_filt or "ทุกเดือน"}{lbl_suffix}</div>', unsafe_allow_html=True)
+
+        def css_mom_cat(v):
+            if not isinstance(v,str) or v in ["–","new"]: return "color:#aaa"
+            try:
+                f=float(v.replace("+","").replace("%",""))
+                return "color:#16A34A;font-weight:500" if f>0 else "color:#DC2626;font-weight:500" if f<0 else ""
+            except: return ""
+
+        tbl_cat = cat_summary[show_cols_cat].rename(columns={"category":"Category","orders":"Orders"})
+        styled_cat = tbl_cat.style.set_properties(**{"font-size":"12px"})
+        if "MoM%" in tbl_cat.columns:
+            styled_cat = styled_cat.map(css_mom_cat, subset=["MoM%"])
+        st.dataframe(styled_cat, hide_index=True, use_container_width=True, height=min(400, 44+len(tbl_cat)*36))
+
+        # ── Subcategory table ──────────────────────────────────────────────
+        st.markdown(f'<div class="section-title">Subcategory Detail{lbl_suffix}</div>', unsafe_allow_html=True)
+        cat_opts_sub = ["ทั้งหมด"] + sorted(svc_cat_data["category"].unique())
+        sub_cat_filt = st.selectbox("Filter by Category", cat_opts_sub, key="sub_cat_sel")
+        sub_data = svc_cat_data.copy()
+        if sub_cat_filt != "ทั้งหมด":
+            sub_data = sub_data[sub_data["category"]==sub_cat_filt]
+
+        if "subcategory" not in sub_data.columns:
+            # fallback: use service_name grouping
+            sub_sum = sub_data.groupby("service_name").agg(gmv=("gmv","sum"),orders=("orders","sum")).reset_index()
+            sub_sum = sub_sum.sort_values("gmv",ascending=False).head(30)
+            sub_sum.columns = ["Service","GMV raw","Orders"]
+            sub_sum["GMV"]   = sub_sum["GMV raw"].apply(fmt_gmv)
+            sub_sum["Share%"]= (sub_sum["GMV raw"]/sub_sum["GMV raw"].sum()*100).round(1).apply(lambda x:f"{x:.1f}%")
+            st.dataframe(sub_sum[["Service","GMV","Share%","Orders"]], hide_index=True, use_container_width=True, height=300)
+        else:
+            sub_sum = sub_data.groupby("subcategory").agg(gmv=("gmv","sum"),orders=("orders","sum")).reset_index().sort_values("gmv",ascending=False)
+            sub_total = sub_sum["gmv"].sum()
+            if len(prev_cat_data) and "subcategory" in prev_cat_data.columns:
+                prev_sub_filt = prev_cat_data[prev_cat_data["category"]==sub_cat_filt] if sub_cat_filt!="ทั้งหมด" else prev_cat_data
+                prev_sub_map  = prev_sub_filt.groupby("subcategory")["gmv"].sum().to_dict()
+                sub_sum["Prev GMV"] = sub_sum["subcategory"].map(lambda c: fmt_gmv(prev_sub_map.get(c,0)))
+                sub_sum["MoM%"]     = sub_sum.apply(lambda r: f"{(r['gmv']-prev_sub_map.get(r['subcategory'],0))/prev_sub_map.get(r['subcategory'],1)*100:+.0f}%" if prev_sub_map.get(r["subcategory"],0)>0 else "new", axis=1)
+            sub_sum["GMV"]    = sub_sum["gmv"].apply(fmt_gmv)
+            sub_sum["Share%"] = (sub_sum["gmv"]/sub_total*100).round(1).apply(lambda x:f"{x:.1f}%")
+            tbl_sub = sub_sum[["subcategory","GMV","Share%"]+([f"Prev GMV","MoM%"] if "MoM%" in sub_sum.columns else [])+["orders"]].rename(columns={"subcategory":"Subcategory","orders":"Orders"})
+            styled_sub = tbl_sub.style.set_properties(**{"font-size":"12px"})
+            if "MoM%" in tbl_sub.columns:
+                styled_sub = styled_sub.map(css_mom_cat, subset=["MoM%"])
+            st.dataframe(styled_sub, hide_index=True, use_container_width=True, height=min(400,44+len(tbl_sub)*36))
     else:
-        mdata_cat  = mdata
+        # Fallback to old category data
+        cat_full = pd.DataFrame((mdata_cat or {}).get("category",[]))
+        if len(cat_full):
+            cat_full = cat_full.sort_values("gmv", ascending=False)
+            cat_full["GMV"] = cat_full["gmv"].apply(fmt_gmv)
+            st.dataframe(cat_full[["category","GMV","orders"]].rename(columns={"category":"Category","orders":"Orders"}),
+                         hide_index=True, use_container_width=True, height=300)
+        else:
+            st.info("Re-upload ข้อมูลเพื่อดู Category detail ครับ")
 
-    cat_full = pd.DataFrame(mdata_cat["category"])
-
-    # Apply KAM filter on shops to get category breakdown by AM
-    if cat_am_filt != "ทั้งหมด" and sel_month_cat:
-        shops_for_cat = pd.DataFrame(mdata_cat.get("shops",[]))
-        if len(shops_for_cat):
-            am_shop_ids = set(shops_for_cat[shops_for_cat["kam"]==cat_am_filt]["shop_id_str"].astype(str))
-            # Note: category breakdown from mdata is not per-AM — show a note
-            st.info(f"หมายเหตุ: Category data แสดง {cat_month_filt} ทั้งหมด · KAM filter มีผลกับ Store Health เท่านั้น")
-
-    st.markdown(f'<div class="section-title">Category Overview — {cat_month_filt}</div>', unsafe_allow_html=True)
-    if len(cat_full):
-        cat_full["new_pct"] = (cat_full["new_customers"]/cat_full["unique_customers"].replace(0,np.nan)*100).round(1).fillna(0)
-        cat_full = cat_full.sort_values("gmv", ascending=False)
-        cat_full["gmv_fmt"] = cat_full["gmv"].apply(fmt_gmv)
-        st.dataframe(
-            cat_full[["category","gmv_fmt","orders","unique_customers","new_customers","new_pct"]].rename(columns={
-                "category":"Category","gmv_fmt":"GMV","orders":"Orders",
-                "unique_customers":"Customers","new_customers":"New","new_pct":"New%"
-            }),
-            hide_index=True, use_container_width=True, height=300
-        )
-
-    if trend.get("category"):
-        trend_cat   = pd.DataFrame(trend["category"])
-        trend_cat_f = trend_cat.copy()
-
-        # Apply month filter to trend
-        if cat_month_filt != "ทุกเดือน" and sel_month_cat:
-            trend_cat_f = trend_cat_f[trend_cat_f["month"]==sel_month_cat]
-
-        st.markdown('<div class="section-title">GMV by Category รายเดือน (฿M)</div>', unsafe_allow_html=True)
-        tc_all = trend_cat.copy()  # always show full trend for chart
-        top_cats = tc_all.groupby("category")["gmv"].sum().nlargest(8).index
-        ct = tc_all[tc_all["category"].isin(top_cats)]
-        ct_pivot = ct.pivot(index="month", columns="category", values="gmv").fillna(0) / 1e6
-        # Rename month index to labels
+    if trend.get("category") and cat_am_filt == "ทั้งหมด":
+        trend_cat = pd.DataFrame(trend["category"])
+        top_cats  = trend_cat.groupby("category")["gmv"].sum().nlargest(8).index
+        ct = trend_cat[trend_cat["category"].isin(top_cats)]
+        ct_pivot = ct.pivot(index="month", columns="category", values="gmv").fillna(0)/1e6
         ct_pivot.index = [idx_now.get(m,{}).get("label",m) for m in ct_pivot.index]
+        st.markdown('<div class="section-title">GMV by Category รายเดือน (฿M)</div>', unsafe_allow_html=True)
         st.line_chart(ct_pivot, use_container_width=True, height=220)
-
-        st.markdown('<div class="section-title">New User % by Category รายเดือน</div>', unsafe_allow_html=True)
-        trend_cat["new_pct"] = (trend_cat["new"]/trend_cat["customers"].replace(0,np.nan)*100).round(1).fillna(0)
-        np_data = trend_cat[trend_cat["category"].isin(top_cats)]
-        np_pivot = np_data.pivot(index="month", columns="category", values="new_pct").fillna(0)
-        np_pivot.index = [idx_now.get(m,{}).get("label",m) for m in np_pivot.index]
-        st.line_chart(np_pivot, use_container_width=True, height=180)
-
-        # Category detail table per month
-        st.markdown('<div class="section-title">Category Detail by Month</div>', unsafe_allow_html=True)
-        cat_detail = trend_cat.copy()
-        cat_detail["gmv"] = pd.to_numeric(cat_detail["gmv"], errors="coerce").fillna(0)
-        cat_detail["month_label"] = cat_detail["month"].map(lambda m: idx_now.get(m,{}).get("label",m))
-        cat_pivot = cat_detail.pivot_table(index="category", columns="month_label",
-                                           values="gmv", aggfunc="sum").fillna(0) / 1e3
-        cat_pivot["Total"] = cat_pivot.sum(axis=1)
-        cat_pivot = cat_pivot.sort_values("Total", ascending=False)
-        st.dataframe(cat_pivot.round(0), use_container_width=True, height=280)
 
 
 # ══ TAB 3: New User ════════════════════════════════════════════════════════════
 with tab_new:
+    # Filters
+    nu1, nu2 = st.columns(2)
+    nu_am_filt   = nu1.selectbox("Filter by KAM",  ["ทั้งหมด"]+sorted(REAL_AMS), key="nu_am")
+    nu_sh_opts   = ["ทั้งหมด"] + sorted(shops_df["organization_name"].unique()) if len(shops_df) else ["ทั้งหมด"]
+    nu_shop_filt = nu2.selectbox("Filter by Shop", nu_sh_opts, key="nu_shop")
+
+    # Get filtered shop ids for new user stats
+    nu_shops = shops_df.copy()
+    if nu_am_filt   != "ทั้งหมด": nu_shops = nu_shops[nu_shops["kam"]==nu_am_filt]
+    if nu_shop_filt != "ทั้งหมด": nu_shops = nu_shops[nu_shops["organization_name"]==nu_shop_filt]
+
+    nu_total = int(nu_shops["unique_customers"].sum()) if "unique_customers" in nu_shops.columns else stats["unique_customers"]
+    nu_new   = int(nu_shops["new_customers"].sum())    if "new_customers"    in nu_shops.columns else stats["new_customers"]
+
     st.markdown('<div class="section-title">New vs Repeat Customers</div>', unsafe_allow_html=True)
-
-    # Current month
     c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Total Customers", f"{stats['unique_customers']:,}")
-    c2.metric("New Customers",   f"{stats['new_customers']:,}")
-    c3.metric("Repeat Customers", f"{stats['unique_customers']-stats['new_customers']:,}")
-    c4.metric("New User %", f"{stats['new_customers']/max(stats['unique_customers'],1)*100:.1f}%")
+    c1.metric("Total Customers",  f"{nu_total:,}")
+    c2.metric("New Customers",    f"{nu_new:,}")
+    c3.metric("Repeat Customers", f"{nu_total-nu_new:,}")
+    c4.metric("New User %",       f"{nu_new/max(nu_total,1)*100:.1f}%")
 
-    # Trend table
+    # Trend table — per-AM from Supabase if filtered
     if idx_now:
         st.markdown('<div class="section-title">New User Trend รายเดือน</div>', unsafe_allow_html=True)
-        rows = []
+        trend_rows = []
         for mk in sorted(idx_now.keys()):
-            s = idx_now[mk]["stats"]
-            rows.append({
-                "Month":     idx_now[mk]["label"],
-                "Total Cust":f"{s['unique_customers']:,}",
-                "New":       f"{s['new_customers']:,}",
-                "Repeat":    f"{s['unique_customers']-s['new_customers']:,}",
-                "New%":      f"{s['new_customers']/max(s['unique_customers'],1)*100:.1f}%",
-                "Orders":    f"{s['orders']:,}",
-                "GMV":       fmt_gmv(s['gmv_run_rate'] if not s.get('is_complete') else s['gmv'], not s.get('is_complete')),
-            })
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            if nu_am_filt != "ทั้งหมด" or nu_shop_filt != "ทั้งหมด":
+                _md = load_month_data(mk)
+                if _md:
+                    _sh = pd.DataFrame(_md.get("shops",[]))
+                    if nu_am_filt   != "ทั้งหมด": _sh = _sh[_sh["kam"]==nu_am_filt]
+                    if nu_shop_filt != "ทั้งหมด": _sh = _sh[_sh["organization_name"]==nu_shop_filt]
+                    _tc = int(_sh["unique_customers"].sum()) if "unique_customers" in _sh.columns else 0
+                    _nc = int(_sh["new_customers"].sum())    if "new_customers"    in _sh.columns else 0
+                    _o  = int(_sh["total_orders"].sum())     if "total_orders"     in _sh.columns else 0
+                    _g  = int(_sh["gmv"].sum())              if "gmv"              in _sh.columns else 0
+                    _cov= idx_now[mk]["stats"].get("coverage_pct",100)/100
+                    _inc= not idx_now[mk]["stats"].get("is_complete",True)
+                    trend_rows.append({
+                        "Month": idx_now[mk]["label"],
+                        "Total Cust": f"{_tc:,}",
+                        "New": f"{_nc:,}",
+                        "Repeat": f"{_tc-_nc:,}",
+                        "New%": f"{_nc/max(_tc,1)*100:.1f}%",
+                        "Orders": f"{_o:,}",
+                        "GMV": fmt_gmv(_g/_cov if _inc and _cov>0 else _g) + (" (RR)" if _inc else ""),
+                    })
+            else:
+                s = idx_now[mk]["stats"]
+                trend_rows.append({
+                    "Month": idx_now[mk]["label"],
+                    "Total Cust": f"{s['unique_customers']:,}",
+                    "New": f"{s['new_customers']:,}",
+                    "Repeat": f"{s['unique_customers']-s['new_customers']:,}",
+                    "New%": f"{s['new_customers']/max(s['unique_customers'],1)*100:.1f}%",
+                    "Orders": f"{s['orders']:,}",
+                    "GMV": fmt_gmv(s['gmv_run_rate'] if not s.get('is_complete') else s['gmv']) + (" (RR)" if not s.get('is_complete') else ""),
+                })
+        st.dataframe(pd.DataFrame(trend_rows), hide_index=True, use_container_width=True)
 
-    # Category new user breakdown
-    if len(cat_full):
+    # Category breakdown
+    nu_cat_src = pd.DataFrame((mdata or {}).get("svc_perf",[]))
+    if nu_am_filt   != "ทั้งหมด" and len(nu_cat_src): nu_cat_src = nu_cat_src[nu_cat_src["kam"]==nu_am_filt]
+    if len(nu_cat_src):
         st.markdown('<div class="section-title">New User % by Category</div>', unsafe_allow_html=True)
-        cf2 = pd.DataFrame(mdata["category"]).copy()
-        cf2["new_pct"] = (cf2["new_customers"]/cf2["unique_customers"].replace(0,np.nan)*100).round(1).fillna(0)
-        cf2 = cf2.sort_values("new_pct", ascending=False)
-        st.bar_chart(cf2.set_index("category")["new_pct"], use_container_width=True, height=200)
+        cf2 = pd.DataFrame(mdata.get("category",[])).copy()
+        if len(cf2):
+            cf2["new_pct"] = (cf2["new_customers"]/cf2["unique_customers"].replace(0,np.nan)*100).round(1).fillna(0)
+            cf2 = cf2.sort_values("new_pct", ascending=False)
+            st.bar_chart(cf2.set_index("category")["new_pct"], use_container_width=True, height=200)
 
 
 # ══ TAB 4: Store Health ════════════════════════════════════════════════════════
@@ -2186,30 +2294,42 @@ with tab_health:
 
     dcols = {"organization_name":"Shop","kam":"AM","category":"Category",
              "total_orders":"Orders","gmv":"GMV","health_score":"Health",
-             "sku_score":"SKU","price_score":"Price",
+             "price_score":"Price",
              "view_score":"View MoM","cvr_score":"CVR MoM","priority":"Priority","alerts":"Alerts"}
 
-    tbl = shops_df[list(dcols.keys())].rename(columns=dcols).copy()
+    tbl = shops_df[[c for c in dcols if c in shops_df.columns]].rename(columns=dcols).copy()
 
-    # Format numbers — clean & readable
-    tbl["GMV"]      = tbl["GMV"].apply(fmt_gmv)
-    tbl["Health"]   = tbl["Health"].apply(lambda x: f"{x:.1f}")
-    tbl["SKU"]      = tbl["SKU"].apply(lambda x: f"{int(x)}")
-    tbl["Price"]    = tbl["Price"].apply(lambda x: f"{int(x)}")
-    tbl["View MoM"] = tbl["View MoM"].apply(lambda x: f"{int(x)}")
-    tbl["CVR MoM"]  = tbl["CVR MoM"].apply(lambda x: f"{int(x)}")
+    # Format numbers
+    tbl["GMV"]      = shops_df["gmv"].apply(lambda x: f"฿{int(x):,}")
+    tbl["Health"]   = shops_df["health_score"].apply(lambda x: f"{x:.1f}")
+    tbl["Price"]    = shops_df["price_score"].apply(lambda x: f"{int(x)}")
+    tbl["View MoM"] = shops_df["view_score"].apply(lambda x: f"{int(x)}")
+    tbl["CVR MoM"]  = shops_df["cvr_score"].apply(lambda x: f"{int(x)}")
 
-    # Add MoM % columns if available
+    # Short alerts
+    def short_alert(a):
+        if not isinstance(a, str): return ""
+        parts = [p.strip() for p in a.split("|")]
+        short = []
+        for p in parts:
+            if "ราคาสูง"   in p: short.append(f"💰 +{p.split('+')[1].split('%')[0]}%" if '+' in p else "💰 ราคา")
+            elif "View ลด"  in p: short.append(f"👁 {p.split('View ลด')[1].split('MoM')[0].strip()}")
+            elif "CR% ลด"   in p: short.append(f"📉 {p.split('CR% ลด')[1].split('MoM')[0].strip()}")
+            elif "SKU น้อย" in p: short.append(f"📦 {p.split('(')[1].split(')')[0]}" if '(' in p else "📦")
+        return " · ".join(short)
+
+    tbl["Alerts"] = shops_df["alerts"].apply(short_alert)
+
     if "view_mom_pct" in shops_df.columns:
         tbl["View Δ"] = shops_df["view_mom_pct"].apply(
-            lambda x: f"{'▲' if x>0 else '▼' if x<0 else '–'}{abs(x):.0f}%" if x != 0 else "–")
+            lambda x: f"{'▲' if x>0 else '▼' if x<0 else '–'}{abs(x):.0f}%" if x!=0 else "–")
     if "cvr_mom_pct" in shops_df.columns:
-        tbl["CVR Δ"] = shops_df["cvr_mom_pct"].apply(
-            lambda x: f"{'▲' if x>0 else '▼' if x<0 else '–'}{abs(x):.0f}%" if x != 0 else "–")
+        tbl["CVR Δ"]  = shops_df["cvr_mom_pct"].apply(
+            lambda x: f"{'▲' if x>0 else '▼' if x<0 else '–'}{abs(x):.0f}%" if x!=0 else "–")
     if "avg_cr" in shops_df.columns:
-        tbl["CR%"] = shops_df["avg_cr"].apply(lambda x: f"{x:.2f}%")
+        tbl["CR%"]    = shops_df["avg_cr"].apply(lambda x: f"{x:.2f}%")
 
-    score_cols  = ["Health","SKU","Price","View MoM","CVR MoM"]
+    score_cols = ["Health","Price","View MoM","CVR MoM"]
 
     def css_str(v):
         """Color score columns — values are now strings like '18.2'."""
@@ -2271,7 +2391,7 @@ with tab_action:
 
     with f_col4:
         sort_by = st.selectbox("Sort by",
-            ["Health score (ต่ำสุดก่อน)", "GMV (สูงสุดก่อน)", "GMV (ต่ำสุดก่อน)", "Alert count (มากสุดก่อน)"],
+            ["Health score (ต่ำสุดก่อน)", "GMV (สูงสุดก่อน)", "GMV (ต่ำสุดก่อน)", "Orders (มากสุดก่อน)", "Shop View (มากสุดก่อน)", "Alert count (มากสุดก่อน)"],
             key="action_sort", label_visibility="visible")
 
     # Apply filters
@@ -2294,6 +2414,8 @@ with tab_action:
         "Health score (ต่ำสุดก่อน)": ("health_score", True),
         "GMV (สูงสุดก่อน)":           ("gmv", False),
         "GMV (ต่ำสุดก่อน)":           ("gmv", True),
+        "Orders (มากสุดก่อน)":         ("total_orders", False),
+        "Shop View (มากสุดก่อน)":      ("avg_view", False),
         "Alert count (มากสุดก่อน)":   ("alert_count", False),
     }
     sc_col, sc_asc = sort_map.get(sort_by, ("health_score", True))
