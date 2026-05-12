@@ -3049,8 +3049,8 @@ with tab_portfolio:
                         view_str = f'{int(row["cur_view"]):,}' if row["cur_view"] else "–"
                         cr_str   = f'{row["cur_cr"]:.2f}%'     if row["cur_cr"]   else "–"
 
-                        price_color = "#DC2626" if row["price_above"]>30 else "#D97706" if row["price_above"]>15 else "#16A34A"
-                        price_str   = f'+{row["price_above"]:.0f}%' if row["price_above"]>0 else "✓ ดี"
+                        price_color = "#1a1a1a"
+                        price_str   = ""  # removed price vs floor %
 
                         all_skus  = get_sku_breakdown(row.get("shop_id",""))
                         skus      = all_skus[:5]
@@ -3067,7 +3067,7 @@ with tab_portfolio:
                             elif pct_up > 0:
                                 price_sku_str = f'<div style="font-size:9px;color:#D97706;margin-top:2px">{n_up}/{n_total} SKUs แพงขึ้น ({pct_up:.0f}%)</div>'
                             else:
-                                price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">ราคาไม่เพิ่มขึ้น</div>'
+                                price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">✓ ราคาไม่ขึ้นจากเดือนก่อน</div>'
                         else:
                             price_sku_str = ""
                         st.markdown(f"""
@@ -3104,16 +3104,17 @@ with tab_portfolio:
       )(row.get("cr_pp"), row.get("cr_pct"))}</div>
     </div>
     <div style="background:#fafafa;border-radius:6px;padding:7px 10px;text-align:center">
-      <div style="font-size:9px;color:#bbb;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Price vs Floor</div>
-      <div style="font-size:14px;color:{price_color};font-weight:600">{price_str}</div>
+      <div style="font-size:9px;color:#bbb;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Price vs Last Month</div>
       {price_sku_str}
     </div>
   </div>
-  <div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 4px 4px 0;padding:6px 10px;font-size:11px;color:#555">
-    💡 {comment}
-  </div>
-  {sku_html}
 </div>""", unsafe_allow_html=True)
+                        _btn_lbl = "▲ ซ่อน" if _is_open else "▼ ดู comment & services"
+                        if st.button(_btn_lbl, key=f"pbtn_{rank}_{row.get('shop_id','')}", use_container_width=True):
+                            st.session_state[_shop_key] = not _is_open
+                            st.rerun()
+                        if _is_open:
+                            st.markdown(f'''<div style="background:#F8F9FA;border-left:3px solid #e0e0e0;border-radius:0 6px 6px 0;padding:8px 12px;font-size:11px;color:#555;margin-bottom:4px">💡 {comment}</div>{sku_html}''', unsafe_allow_html=True)
 
                 # ── Header ────────────────────────────────────────────────────
                 _pf_cur_g  = float(cur_am["gmv"].sum())
