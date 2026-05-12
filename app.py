@@ -2841,6 +2841,19 @@ with tab_portfolio:
                         nm = str(pr.get("organization_name","")).strip()
                         if nm: prev_map_name[nm] = pr.to_dict()
 
+                # DEBUG — show shop_id_s format from Supabase
+                with st.expander("🔧 Debug: shop_id_s format", expanded=False):
+                    sample_cur  = cur_am[["shop_id_s","organization_name","gmv"]].head(5).copy() if "shop_id_s" in cur_am.columns else pd.DataFrame()
+                    sample_prev = prev_am[["shop_id_s","organization_name","gmv"]].head(5).copy() if "shop_id_s" in prev_am.columns else pd.DataFrame()
+                    st.write("**May shops (sample):**", sample_cur)
+                    st.write("**Apr shops (sample):**", sample_prev)
+                    drj_cur  = cur_am[cur_am.get("organization_name","").str.contains("Dr.J", na=False)]  if "organization_name" in cur_am.columns else pd.DataFrame()
+                    drj_cur  = cur_am[cur_am["organization_name"].str.contains("Dr.J", na=False)] if "organization_name" in cur_am.columns else pd.DataFrame()
+                    drj_prev = prev_am[prev_am["organization_name"].str.contains("Dr.J", na=False)] if "organization_name" in prev_am.columns else pd.DataFrame()
+                    st.write("**Dr.J in May:**", drj_cur[["shop_id_s","organization_name","gmv"]].to_dict() if len(drj_cur) else "not found")
+                    st.write("**Dr.J in Apr:**", drj_prev[["shop_id_s","organization_name","gmv"]].to_dict() if len(drj_prev) else "not found")
+                    st.write("**prev_map keys sample:**", list(prev_map.keys())[:10])
+
                 # Compute MoM metrics per shop
                 rows = []
                 for _, r in cur_am.iterrows():
