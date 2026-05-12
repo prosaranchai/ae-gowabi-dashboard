@@ -3070,8 +3070,11 @@ with tab_portfolio:
                                 price_sku_str = f'<div style="font-size:9px;color:#16A34A;margin-top:2px">✓ ราคาไม่ขึ้นจากเดือนก่อน</div>'
                         else:
                             price_sku_str = ""
+                        _shop_key = f"port_expand_{rank}_{row.get('shop_id','')}"
+                        _is_open  = st.session_state.get(_shop_key, False)
+
                         st.markdown(f"""
-<div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:8px;page-break-inside:avoid">
+<div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:12px 16px;margin-bottom:{"4px" if _is_open else "8px"};page-break-inside:avoid">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
     <div style="width:22px;height:22px;border-radius:50%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;color:#555">{rank}</div>
     <div style="flex:1;min-width:0">
