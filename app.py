@@ -2902,9 +2902,9 @@ with tab_portfolio:
                 pf_df = pd.DataFrame(rows)
                 pf_df_valid = pf_df[pf_df["prev_gmv"] > 0].copy()
 
-                # Sort by absolute ฿ change (RR-adjusted)
+                # cur_gmv ใน rows dict ถูก RR-adjust แล้วตอนสร้าง (ไม่ต้องหารซ้ำ)
                 _pf_cov3  = pf_cov if pf_cov > 0 else 1.0
-                pf_df_valid["gmv_rr"]      = pf_df_valid["cur_gmv"] / _pf_cov3 if pf_is_rr else pf_df_valid["cur_gmv"]
+                pf_df_valid["gmv_rr"]      = pf_df_valid["cur_gmv"]   # already RR-adjusted
                 pf_df_valid["gmv_abs_chg"] = pf_df_valid["gmv_rr"] - pf_df_valid["prev_gmv"]
                 # Growth: ร้านที่ GMV เพิ่มขึ้น เรียงตาม GMV Run Rate ปัจจุบันมากไปน้อย
                 top10_growth = (pf_df_valid[pf_df_valid["gmv_abs_chg"] > 0]
